@@ -16,6 +16,7 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/middleware"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -39,6 +40,22 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(db, sm)
 
+	// OAuth setup (only if configured)
+	var oauthHandler *handlers.OAuthHandler
+	if cfg.DiscordEnabled() {
+		discordConfig := &oauth2.Config{
+			ClientID:     cfg.OAuthDiscordClientID,
+			ClientSecret: cfg.OAuthDiscordClientSecret,
+			RedirectURL:  cfg.OAuthDiscordRedirectURL,
+			Scopes:       []string{"identify", "email"},
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  "https://discord.com/api/oauth2/authorize",
+				TokenURL: "https://discord.com/api/oauth2/token",
+			},
+		}
+		oauthHandler = handlers.NewOAuthHandler(db, sm, discordConfig)
+	}
+
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
@@ -53,6 +70,11 @@ func main() {
 	{
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
+
+		if oauthHandler != nil {
+			auth.GET("/oauth/discord", oauthHandler.DiscordAuthorize)
+			auth.GET("/oauth/discord/callback", oauthHandler.DiscordCallback)
+		}
 	}
 
 	// Protected routes - token required
@@ -61,6 +83,7 @@ func main() {
 	{
 		protected.GET("/session", authHandler.Session)
 		protected.POST("/logout", authHandler.Logout)
+		protected.POST("/password", authHandler.ChangePassword)
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)

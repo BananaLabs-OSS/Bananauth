@@ -9,6 +9,7 @@ require (
 	github.com/uptrace/bun v1.2.16
 	github.com/uptrace/bun/dialect/sqlitedialect v1.2.16
 	golang.org/x/crypto v0.48.0
+	golang.org/x/oauth2 v0.35.0
 	modernc.org/sqlite v1.45.0
 )
 

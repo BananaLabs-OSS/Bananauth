@@ -41,6 +41,7 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 	tables := []interface{}{
 		(*models.Account)(nil),
 		(*models.NativeAccount)(nil),
+		(*models.OAuthLink)(nil),
 	}
 
 	for _, model := range tables {
@@ -68,6 +69,14 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 		{
 			"idx_auth_native_account",
 			"CREATE INDEX IF NOT EXISTS idx_auth_native_account ON auth_native (account_id)",
+		},
+		{
+			"idx_auth_oauth_account",
+			"CREATE INDEX IF NOT EXISTS idx_auth_oauth_account ON auth_oauth (account_id)",
+		},
+		{
+			"idx_auth_oauth_provider",
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_oauth_provider ON auth_oauth (provider, provider_id)",
 		},
 	}
 
