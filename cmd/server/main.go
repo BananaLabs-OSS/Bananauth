@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bananalabs-oss/bananauth/internal/config"
+	"github.com/bananalabs-oss/bananauth/internal/database"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,6 +19,18 @@ func main() {
 	log.Printf("Starting Bananauth")
 
 	cfg := config.Load()
+
+	ctx := context.Background()
+
+	db, err := database.Connect(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	if err := database.Migrate(ctx, db); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
 
 	router := gin.Default()
 
