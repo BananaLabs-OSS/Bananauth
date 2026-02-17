@@ -38,7 +38,7 @@ func main() {
 
 	sm := sessions.NewManager(cfg.JWTSecret, cfg.TokenExpiry)
 
-	authHandler := handlers.NewAuthHandler(db, sm)
+	authHandler := handlers.NewAuthHandler(db, sm, nil)
 
 	// OAuth setup (only if configured)
 	var oauthHandler *handlers.OAuthHandler
@@ -70,6 +70,8 @@ func main() {
 	{
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
+		auth.POST("/password/forgot", authHandler.ForgotPassword)
+		auth.POST("/password/reset", authHandler.ResetPassword)
 
 		if oauthHandler != nil {
 			auth.GET("/oauth/discord", oauthHandler.DiscordAuthorize)
