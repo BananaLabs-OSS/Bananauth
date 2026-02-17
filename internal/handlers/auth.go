@@ -358,6 +358,64 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "password reset successful"})
 }
 
+func (h *AuthHandler) DeleteAccount(c *gin.Context) {
+	var req models.DeleteAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "invalid_request",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	accountID, _ := c.Get("account_id")
+	sessionID, _ := c.Get("session_id")
+	ctx := c.Request.Context()
+
+	// Verify password if native account exists
+	var native models.NativeAccount
+	err := h.db.NewSelect().
+		Model(&native).
+		Where("account_id = ?", accountID).
+		Scan(ctx)
+
+	if err == nil {
+		// Has native account — verify password
+		if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.Password)); err != nil {
+			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+				Error:   "invalid_password",
+				Message: "Password is incorrect",
+			})
+			return
+		}
+	}
+
+	// Delete everything in a transaction
+	err = h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// OTP codes
+		_, _ = tx.NewDelete().Model((*models.OTPCode)(nil)).Where("email = ?", native.Email).Exec(ctx)
+
+		// OAuth links
+		_, _ = tx.NewDelete().Model((*models.OAuthLink)(nil)).Where("account_id = ?", accountID).Exec(ctx)
+
+		// Native account
+		_, _ = tx.NewDelete().Model((*models.NativeAccount)(nil)).Where("account_id = ?", accountID).Exec(ctx)
+
+		// Account
+		_, err := tx.NewDelete().Model((*models.Account)(nil)).Where("id = ?", accountID).Exec(ctx)
+		return err
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "deletion_failed"})
+		return
+	}
+
+	// Revoke current session
+	h.sessions.Revoke(sessionID.(string))
+
+	c.JSON(http.StatusOK, gin.H{"message": "account deleted"})
+}
+
 func generateOTP() string {
 	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 6)

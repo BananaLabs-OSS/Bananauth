@@ -86,6 +86,7 @@ func main() {
 		protected.GET("/session", authHandler.Session)
 		protected.POST("/logout", authHandler.Logout)
 		protected.POST("/password", authHandler.ChangePassword)
+		protected.DELETE("/account", authHandler.DeleteAccount)
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
