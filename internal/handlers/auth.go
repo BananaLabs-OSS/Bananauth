@@ -188,3 +188,60 @@ func (h *AuthHandler) Session(c *gin.Context) {
 		"valid":      true,
 	})
 }
+
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	var req models.PasswordChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "invalid_request",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	accountID, _ := c.Get("account_id")
+	ctx := c.Request.Context()
+
+	// Get current native account
+	var native models.NativeAccount
+	err := h.db.NewSelect().
+		Model(&native).
+		Where("account_id = ?", accountID).
+		Scan(ctx)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{
+			Error:   "not_found",
+			Message: "No native account found",
+		})
+		return
+	}
+
+	// Verify current password
+	if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "invalid_password",
+			Message: "Current password is incorrect",
+		})
+		return
+	}
+
+	// Hash new password
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "hash_error"})
+		return
+	}
+
+	// Update
+	_, err = h.db.NewUpdate().
+		Model(&native).
+		Set("password_hash = ?", string(hash)).
+		Where("id = ?", native.ID).
+		Exec(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "update_error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "password changed"})
+}

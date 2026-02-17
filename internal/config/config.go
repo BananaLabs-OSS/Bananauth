@@ -14,6 +14,10 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	TokenExpiry time.Duration
+
+	OAuthDiscordClientID     string
+	OAuthDiscordClientSecret string
+	OAuthDiscordRedirectURL  string
 }
 
 func Load() *Config {
@@ -25,6 +29,10 @@ func Load() *Config {
 	jwtSecret := flag.String("jwt-secret", envOrDefault("JWT_SECRET", ""), "JWT signing secret (required)")
 	tokenExpiry := flag.Int("token-expiry", envOrDefaultInt("TOKEN_EXPIRY", 1440), "Token expiry in minutes (default 24h)")
 
+	discordClientID := flag.String("oauth-discord-client-id", envOrDefault("OAUTH_DISCORD_CLIENT_ID", ""), "Discord OAuth client ID")
+	discordClientSecret := flag.String("oauth-discord-client-secret", envOrDefault("OAUTH_DISCORD_CLIENT_SECRET", ""), "Discord OAuth client secret")
+	discordRedirectURL := flag.String("oauth-discord-redirect-url", envOrDefault("OAUTH_DISCORD_REDIRECT_URL", ""), "Discord OAuth redirect URL")
+
 	flag.Parse()
 
 	cfg.Host = *host
@@ -32,6 +40,9 @@ func Load() *Config {
 	cfg.DatabaseURL = *databaseURL
 	cfg.JWTSecret = *jwtSecret
 	cfg.TokenExpiry = time.Duration(*tokenExpiry) * time.Minute
+	cfg.OAuthDiscordClientID = *discordClientID
+	cfg.OAuthDiscordClientSecret = *discordClientSecret
+	cfg.OAuthDiscordRedirectURL = *discordRedirectURL
 
 	if cfg.JWTSecret == "" {
 		log.Fatal("JWT_SECRET is required")
@@ -42,8 +53,20 @@ func Load() *Config {
 	log.Printf("  Port:         %s", cfg.Port)
 	log.Printf("  Database:     %s", maskDSN(cfg.DatabaseURL))
 	log.Printf("  Token Expiry: %s", cfg.TokenExpiry)
+	log.Printf("  Discord OAuth: %s", enabledStr(cfg.OAuthDiscordClientID))
 
 	return cfg
+}
+
+func enabledStr(val string) string {
+	if val != "" {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func (c *Config) DiscordEnabled() bool {
+	return c.OAuthDiscordClientID != "" && c.OAuthDiscordClientSecret != ""
 }
 
 func envOrDefault(key, fallback string) string {
