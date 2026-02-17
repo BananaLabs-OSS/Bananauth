@@ -47,6 +47,27 @@ type OAuthLink struct {
 	Account *Account `bun:"rel:belongs-to,join:account_id=id" json:"-"`
 }
 
+type OTPCode struct {
+	bun.BaseModel `bun:"table:auth_otp_codes,alias:otp"`
+
+	ID        uuid.UUID `bun:"id,pk,type:uuid" json:"id"`
+	Email     string    `bun:"email,notnull" json:"email"`
+	Code      string    `bun:"code,notnull" json:"code"`
+	Type      string    `bun:"type,notnull" json:"type"`
+	ExpiresAt time.Time `bun:"expires_at,notnull" json:"expires_at"`
+	CreatedAt time.Time `bun:"created_at,notnull" json:"created_at"`
+	Metadata  string    `bun:"metadata" json:"metadata,omitempty"`
+}
+
+type ForgotPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type ResetPasswordRequest struct {
+	Code        string `json:"code" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
+}
+
 // --- Request / Response types ---
 
 type RegisterRequest struct {

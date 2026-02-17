@@ -2,7 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"log"
+	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
@@ -14,14 +18,16 @@ import (
 )
 
 type AuthHandler struct {
-	db       *bun.DB
-	sessions *sessions.Manager
+	db        *bun.DB
+	sessions  *sessions.Manager
+	sendEmail func(string, string) error
 }
 
-func NewAuthHandler(db *bun.DB, sm *sessions.Manager) *AuthHandler {
+func NewAuthHandler(db *bun.DB, sm *sessions.Manager, sendEmail func(string, string) error) *AuthHandler {
 	return &AuthHandler{
-		db:       db,
-		sessions: sm,
+		db:        db,
+		sessions:  sm,
+		sendEmail: sendEmail,
 	}
 }
 
@@ -244,4 +250,120 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "password changed"})
+}
+
+func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	var req models.ForgotPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "invalid_request",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	successResponse := gin.H{"message": "if an account exists, a reset code has been sent"}
+
+	var native models.NativeAccount
+	err := h.db.NewSelect().
+		Model(&native).
+		Where("email = ?", req.Email).
+		Scan(ctx)
+	if err != nil {
+		c.JSON(http.StatusOK, successResponse)
+		return
+	}
+
+	// Delete existing reset codes for this email
+	_, _ = h.db.NewDelete().
+		Model((*models.OTPCode)(nil)).
+		Where("email = ? AND type = ?", req.Email, "password_reset").
+		Exec(ctx)
+
+	code := generateOTP()
+	now := time.Now().UTC()
+
+	otp := models.OTPCode{
+		ID:        uuid.New(),
+		Email:     req.Email,
+		Code:      code,
+		Type:      "password_reset",
+		ExpiresAt: now.Add(10 * time.Minute),
+		CreatedAt: now,
+		Metadata:  native.AccountID.String(),
+	}
+
+	if _, err := h.db.NewInsert().Model(&otp).Exec(ctx); err != nil {
+		c.JSON(http.StatusOK, successResponse)
+		return
+	}
+
+	if h.sendEmail != nil {
+		_ = h.sendEmail(req.Email, code)
+	} else {
+		log.Printf("Password reset OTP for %s: %s", req.Email, code)
+	}
+
+	c.JSON(http.StatusOK, successResponse)
+}
+
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req models.ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+			Error:   "invalid_request",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	var otp models.OTPCode
+	err := h.db.NewSelect().
+		Model(&otp).
+		Where("code = ? AND type = ? AND expires_at > ?", strings.ToUpper(req.Code), "password_reset", time.Now().UTC()).
+		Scan(ctx)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			Error:   "invalid_code",
+			Message: "Invalid or expired reset code",
+		})
+		return
+	}
+
+	// Delete used OTP
+	_, _ = h.db.NewDelete().
+		Model((*models.OTPCode)(nil)).
+		Where("id = ?", otp.ID).
+		Exec(ctx)
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "hash_error"})
+		return
+	}
+
+	_, err = h.db.NewUpdate().
+		Model((*models.NativeAccount)(nil)).
+		Set("password_hash = ?", string(hash)).
+		Where("account_id = ?", otp.Metadata).
+		Exec(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "update_error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "password reset successful"})
+}
+
+func generateOTP() string {
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		b[i] = chars[n.Int64()]
+	}
+	return string(b)
 }
