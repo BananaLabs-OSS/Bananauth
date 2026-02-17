@@ -171,3 +171,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		AccountID:   native.AccountID.String(),
 	})
 }
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	sessionID, _ := c.Get("session_id")
+
+	h.sessions.Revoke(sessionID.(string))
+
+	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+}
+
+func (h *AuthHandler) Session(c *gin.Context) {
+	accountID, _ := c.Get("account_id")
+
+	c.JSON(http.StatusOK, gin.H{
+		"account_id": accountID,
+		"valid":      true,
+	})
+}

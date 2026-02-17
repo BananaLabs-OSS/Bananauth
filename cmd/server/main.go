@@ -13,6 +13,7 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/config"
 	"github.com/bananalabs-oss/bananauth/internal/database"
 	"github.com/bananalabs-oss/bananauth/internal/handlers"
+	"github.com/bananalabs-oss/bananauth/internal/middleware"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
 	"github.com/gin-gonic/gin"
 )
@@ -47,10 +48,19 @@ func main() {
 		})
 	})
 
+	// Public routes - no auth required
 	auth := router.Group("/auth")
 	{
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
+	}
+
+	// Protected routes - token required
+	protected := router.Group("/auth")
+	protected.Use(middleware.Auth(sm))
+	{
+		protected.GET("/session", authHandler.Session)
+		protected.POST("/logout", authHandler.Logout)
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
