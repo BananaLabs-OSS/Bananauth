@@ -31,3 +31,5 @@ go.work.sum
 # .idea/
 # .vscode/
 bananauth.db 
+bananauth.db-shm 
+bananauth.db-wal 

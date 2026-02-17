@@ -86,6 +86,10 @@ type PasswordChangeRequest struct {
 	NewPassword     string `json:"new_password" binding:"required,min=8"`
 }
 
+type DeleteAccountRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
 type TokenResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
