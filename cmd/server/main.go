@@ -12,6 +12,8 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/config"
 	"github.com/bananalabs-oss/bananauth/internal/database"
+	"github.com/bananalabs-oss/bananauth/internal/handlers"
+	"github.com/bananalabs-oss/bananauth/internal/sessions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,6 +34,10 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
+	sm := sessions.NewManager(cfg.JWTSecret, cfg.TokenExpiry)
+
+	authHandler := handlers.NewAuthHandler(db, sm)
+
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
@@ -40,6 +46,12 @@ func main() {
 			"status":  "healthy",
 		})
 	})
+
+	auth := router.Group("/auth")
+	{
+		auth.POST("/register", authHandler.Register)
+		auth.POST("/login", authHandler.Login)
+	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
 	srv := &http.Server{
