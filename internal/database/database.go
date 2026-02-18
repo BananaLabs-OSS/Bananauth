@@ -43,6 +43,7 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 		(*models.NativeAccount)(nil),
 		(*models.OAuthLink)(nil),
 		(*models.OTPCode)(nil),
+		(*models.Profile)(nil),
 	}
 
 	for _, model := range tables {

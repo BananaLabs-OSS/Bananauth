@@ -13,6 +13,7 @@ Bananauth handles:
 - **Sessions**: JWT tokens with in-memory session tracking and revocation
 - **Password Management**: Change password, forgot/reset via OTP
 - **Account Lifecycle**: Registration, deletion, and session validation
+- **Profiles**: Display name management for platform identity
 
 ## Quick Start
 
@@ -73,6 +74,7 @@ bananauth:
 | `POST` | `/auth/password/reset`         | Reset password with OTP code       |
 | `GET`  | `/auth/oauth/discord`          | Begin Discord OAuth flow           |
 | `GET`  | `/auth/oauth/discord/callback` | Discord OAuth callback             |
+| `GET`  | `/profiles/:id`                | Get user profile by account ID     |
 
 ### Protected Endpoints (requires `Authorization: Bearer <token>`)
 
@@ -82,6 +84,8 @@ bananauth:
 | `POST`   | `/auth/logout`   | Revoke current session            |
 | `POST`   | `/auth/password` | Change password                   |
 | `DELETE` | `/auth/account`  | Delete account                    |
+| `POST`   | `/profiles`      | Create profile                    |
+| `PUT`    | `/profiles`      | Update profile                    |
 
 ### Register
 
@@ -141,14 +145,48 @@ curl -X DELETE http://localhost:8001/auth/account \
   -d '{"password":"securepass"}'
 ```
 
+### Create Profile
+
+```bash
+curl -X POST http://localhost:8001/profiles \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name":"PlayerOne"}'
+```
+
+```json
+{
+  "account_id": "uuid",
+  "display_name": "PlayerOne",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+### Get Profile
+
+```bash
+curl http://localhost:8001/profiles/<account_id>
+```
+
+### Update Profile
+
+```bash
+curl -X PUT http://localhost:8001/profiles \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name":"NewName"}'
+```
+
 ## Database
 
-Bananauth uses SQLite by default. Three tables:
+Bananauth uses SQLite by default. Tables:
 
 - `auth_accounts` — Identity records
 - `auth_native` — Email/password credentials
 - `auth_oauth` — OAuth provider links
 - `auth_otp_codes` — Password reset codes
+- `profiles` — User display names
 
 Tables are auto-created on startup.
 

@@ -40,6 +40,8 @@ func main() {
 
 	authHandler := handlers.NewAuthHandler(db, sm, nil)
 
+	profileHandler := handlers.NewProfileHandler(db)
+
 	// OAuth setup (only if configured)
 	var oauthHandler *handlers.OAuthHandler
 	if cfg.DiscordEnabled() {
@@ -79,6 +81,11 @@ func main() {
 		}
 	}
 
+	profiles := router.Group("/profiles")
+	{
+		profiles.GET("/:id", profileHandler.Get)
+	}
+
 	// Protected routes - token required
 	protected := router.Group("/auth")
 	protected.Use(middleware.Auth(sm))
@@ -87,6 +94,13 @@ func main() {
 		protected.POST("/logout", authHandler.Logout)
 		protected.POST("/password", authHandler.ChangePassword)
 		protected.DELETE("/account", authHandler.DeleteAccount)
+	}
+
+	protectedProfiles := router.Group("/profiles")
+	protectedProfiles.Use(middleware.Auth(sm))
+	{
+		protectedProfiles.POST("", profileHandler.Create)
+		protectedProfiles.PUT("", profileHandler.Update)
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
