@@ -392,6 +392,9 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 
 	// Delete everything in a transaction
 	err = h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// Profile
+		_, _ = tx.NewDelete().Model((*models.Profile)(nil)).Where("account_id = ?", accountID).Exec(ctx)
+
 		// OTP codes
 		_, _ = tx.NewDelete().Model((*models.OTPCode)(nil)).Where("email = ?", native.Email).Exec(ctx)
 

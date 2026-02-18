@@ -68,6 +68,27 @@ type ResetPasswordRequest struct {
 	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
+type DeleteAccountRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+type Profile struct {
+	bun.BaseModel `bun:"table:profiles,alias:p"`
+
+	AccountID   uuid.UUID `bun:"account_id,pk,type:uuid" json:"account_id"`
+	DisplayName string    `bun:"display_name,notnull" json:"display_name"`
+	CreatedAt   time.Time `bun:"created_at,notnull" json:"created_at"`
+	UpdatedAt   time.Time `bun:"updated_at,notnull" json:"updated_at"`
+}
+
+type CreateProfileRequest struct {
+	DisplayName string `json:"display_name" binding:"required,min=2,max=32"`
+}
+
+type UpdateProfileRequest struct {
+	DisplayName string `json:"display_name" binding:"omitempty,min=2,max=32"`
+}
+
 // --- Request / Response types ---
 
 type RegisterRequest struct {
@@ -84,10 +105,6 @@ type LoginRequest struct {
 type PasswordChangeRequest struct {
 	CurrentPassword string `json:"current_password" binding:"required"`
 	NewPassword     string `json:"new_password" binding:"required,min=8"`
-}
-
-type DeleteAccountRequest struct {
-	Password string `json:"password" binding:"required"`
 }
 
 type TokenResponse struct {
