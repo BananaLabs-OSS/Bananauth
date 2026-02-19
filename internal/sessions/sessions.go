@@ -35,6 +35,21 @@ func NewManager(jwtSecret string, expiry time.Duration) *Manager {
 	}
 }
 
+// Secret returns the JWT signing key.
+// Used by BananAuth's middleware to pass to Potassium's ParseToken.
+func (m *Manager) Secret() []byte {
+	return m.jwtSecret
+}
+
+// Exists checks if a session has not been revoked.
+// Used by BananAuth's middleware after Potassium validates the JWT.
+func (m *Manager) Exists(sessionID string) bool {
+	m.mu.RLock()
+	_, exists := m.sessions[sessionID]
+	m.mu.RUnlock()
+	return exists
+}
+
 func (m *Manager) Create(accountID uuid.UUID) (string, int, error) {
 	sessionID := uuid.New().String()
 
