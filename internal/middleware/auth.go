@@ -5,9 +5,13 @@ import (
 	"strings"
 
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	potassium "github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 )
 
+// Auth returns BananAuth-specific middleware that validates JWTs
+// AND checks session revocation. Other services use Potassium's
+// JWTAuth directly since they don't own sessions.
 func Auth(sm *sessions.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -26,7 +30,8 @@ func Auth(sm *sessions.Manager) gin.HandlerFunc {
 			return
 		}
 
-		claims, err := sm.Validate(parts[1])
+		// Step 1: Validate JWT signature and claims (Potassium)
+		claims, err := potassium.ParseToken(parts[1], sm.Secret())
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid or expired token",
@@ -34,9 +39,16 @@ func Auth(sm *sessions.Manager) gin.HandlerFunc {
 			return
 		}
 
+		// Step 2: Check session not revoked (BananAuth-specific)
+		if !sm.Exists(claims.SessionID) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "session revoked",
+			})
+			return
+		}
+
 		c.Set("account_id", claims.AccountID)
 		c.Set("session_id", claims.SessionID)
-
 		c.Next()
 	}
 }
