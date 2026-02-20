@@ -3,9 +3,9 @@ package config
 import (
 	"flag"
 	"log"
-	"os"
-	"strconv"
 	"time"
+
+	pconfig "github.com/bananalabs-oss/potassium/config"
 )
 
 type Config struct {
@@ -23,15 +23,15 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{}
 
-	host := flag.String("host", envOrDefault("HOST", "0.0.0.0"), "Server host")
-	port := flag.String("port", envOrDefault("PORT", "8001"), "Server port")
-	databaseURL := flag.String("database-url", envOrDefault("DATABASE_URL", "sqlite://bananauth.db"), "Database connection string")
-	jwtSecret := flag.String("jwt-secret", envOrDefault("JWT_SECRET", ""), "JWT signing secret (required)")
-	tokenExpiry := flag.Int("token-expiry", envOrDefaultInt("TOKEN_EXPIRY", 1440), "Token expiry in minutes (default 24h)")
+	host := flag.String("host", pconfig.EnvOrDefault("HOST", "0.0.0.0"), "Server host")
+	port := flag.String("port", pconfig.EnvOrDefault("PORT", "8001"), "Server port")
+	databaseURL := flag.String("database-url", pconfig.EnvOrDefault("DATABASE_URL", "sqlite://bananauth.db"), "Database connection string")
+	jwtSecret := flag.String("jwt-secret", pconfig.EnvOrDefault("JWT_SECRET", ""), "JWT signing secret (required)")
+	tokenExpiry := flag.Int("token-expiry", pconfig.EnvOrDefaultInt("TOKEN_EXPIRY", 1440), "Token expiry in minutes (default 24h)")
 
-	discordClientID := flag.String("oauth-discord-client-id", envOrDefault("OAUTH_DISCORD_CLIENT_ID", ""), "Discord OAuth client ID")
-	discordClientSecret := flag.String("oauth-discord-client-secret", envOrDefault("OAUTH_DISCORD_CLIENT_SECRET", ""), "Discord OAuth client secret")
-	discordRedirectURL := flag.String("oauth-discord-redirect-url", envOrDefault("OAUTH_DISCORD_REDIRECT_URL", ""), "Discord OAuth redirect URL")
+	discordClientID := flag.String("oauth-discord-client-id", pconfig.EnvOrDefault("OAUTH_DISCORD_CLIENT_ID", ""), "Discord OAuth client ID")
+	discordClientSecret := flag.String("oauth-discord-client-secret", pconfig.EnvOrDefault("OAUTH_DISCORD_CLIENT_SECRET", ""), "Discord OAuth client secret")
+	discordRedirectURL := flag.String("oauth-discord-redirect-url", pconfig.EnvOrDefault("OAUTH_DISCORD_REDIRECT_URL", ""), "Discord OAuth redirect URL")
 
 	flag.Parse()
 
@@ -67,22 +67,6 @@ func enabledStr(val string) string {
 
 func (c *Config) DiscordEnabled() bool {
 	return c.OAuthDiscordClientID != "" && c.OAuthDiscordClientSecret != ""
-}
-
-func envOrDefault(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
-	}
-	return fallback
-}
-
-func envOrDefaultInt(key string, fallback int) int {
-	if val, ok := os.LookupEnv(key); ok {
-		if i, err := strconv.Atoi(val); err == nil {
-			return i
-		}
-	}
-	return fallback
 }
 
 func maskDSN(dsn string) string {

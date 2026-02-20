@@ -113,7 +113,3 @@ type TokenResponse struct {
 	AccountID   string `json:"account_id"`
 }
 
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
-}

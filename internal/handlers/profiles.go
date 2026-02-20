@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
+	"github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
@@ -21,7 +22,7 @@ func NewProfileHandler(db *bun.DB) *ProfileHandler {
 func (h *ProfileHandler) Create(c *gin.Context) {
 	var req models.CreateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -34,7 +35,7 @@ func (h *ProfileHandler) Create(c *gin.Context) {
 	var existing models.Profile
 	err := h.db.NewSelect().Model(&existing).Where("account_id = ?", accountID).Scan(ctx)
 	if err == nil {
-		c.JSON(http.StatusConflict, models.ErrorResponse{
+		c.JSON(http.StatusConflict, middleware.ErrorResponse{
 			Error:   "profile_exists",
 			Message: "Profile already exists for this account",
 		})
@@ -50,7 +51,7 @@ func (h *ProfileHandler) Create(c *gin.Context) {
 	}
 
 	if _, err := h.db.NewInsert().Model(&profile).Exec(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "creation_failed"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "creation_failed"})
 		return
 	}
 
@@ -64,7 +65,7 @@ func (h *ProfileHandler) Get(c *gin.Context) {
 	var profile models.Profile
 	err := h.db.NewSelect().Model(&profile).Where("account_id = ?", id).Scan(ctx)
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
+		c.JSON(http.StatusNotFound, middleware.ErrorResponse{
 			Error:   "not_found",
 			Message: "Profile not found",
 		})
@@ -77,7 +78,7 @@ func (h *ProfileHandler) Get(c *gin.Context) {
 func (h *ProfileHandler) Update(c *gin.Context) {
 	var req models.UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -90,7 +91,7 @@ func (h *ProfileHandler) Update(c *gin.Context) {
 	var profile models.Profile
 	err := h.db.NewSelect().Model(&profile).Where("account_id = ?", accountID).Scan(ctx)
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
+		c.JSON(http.StatusNotFound, middleware.ErrorResponse{
 			Error:   "not_found",
 			Message: "Profile not found",
 		})
@@ -103,7 +104,7 @@ func (h *ProfileHandler) Update(c *gin.Context) {
 	profile.UpdatedAt = time.Now().UTC()
 
 	if _, err := h.db.NewUpdate().Model(&profile).WherePK().Exec(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "update_failed"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "update_failed"})
 		return
 	}
 
