@@ -11,6 +11,7 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	"github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
@@ -34,7 +35,7 @@ func NewAuthHandler(db *bun.DB, sm *sessions.Manager, sendEmail func(string, str
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -49,11 +50,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		Where("email = ?", req.Email).
 		Exists(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "database_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "database_error"})
 		return
 	}
 	if exists {
-		c.JSON(http.StatusConflict, models.ErrorResponse{
+		c.JSON(http.StatusConflict, middleware.ErrorResponse{
 			Error:   "email_taken",
 			Message: "An account with this email already exists",
 		})
@@ -66,11 +67,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		Where("username = ?", req.Username).
 		Exists(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "database_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "database_error"})
 		return
 	}
 	if exists {
-		c.JSON(http.StatusConflict, models.ErrorResponse{
+		c.JSON(http.StatusConflict, middleware.ErrorResponse{
 			Error:   "username_taken",
 			Message: "This username is already taken",
 		})
@@ -80,7 +81,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "hash_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "hash_error"})
 		return
 	}
 
@@ -111,7 +112,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{
 			Error:   "creation_failed",
 			Message: "Failed to create account",
 		})
@@ -121,7 +122,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// Create session
 	token, expiresIn, err := h.sessions.Create(account.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "session_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "session_error"})
 		return
 	}
 
@@ -135,7 +136,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -150,7 +151,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		Where("email = ?", req.Email).
 		Scan(ctx)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 			Error:   "invalid_credentials",
 			Message: "Invalid email or password",
 		})
@@ -158,7 +159,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 			Error:   "invalid_credentials",
 			Message: "Invalid email or password",
 		})
@@ -167,7 +168,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	token, expiresIn, err := h.sessions.Create(native.AccountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "session_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "session_error"})
 		return
 	}
 
@@ -198,7 +199,7 @@ func (h *AuthHandler) Session(c *gin.Context) {
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	var req models.PasswordChangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -215,7 +216,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		Where("account_id = ?", accountID).
 		Scan(ctx)
 	if err != nil {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{
+		c.JSON(http.StatusNotFound, middleware.ErrorResponse{
 			Error:   "not_found",
 			Message: "No native account found",
 		})
@@ -224,7 +225,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 	// Verify current password
 	if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.CurrentPassword)); err != nil {
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 			Error:   "invalid_password",
 			Message: "Current password is incorrect",
 		})
@@ -234,7 +235,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	// Hash new password
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "hash_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "hash_error"})
 		return
 	}
 
@@ -245,7 +246,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		Where("id = ?", native.ID).
 		Exec(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "update_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "update_error"})
 		return
 	}
 
@@ -255,7 +256,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	var req models.ForgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -311,7 +312,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req models.ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -326,7 +327,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		Where("code = ? AND type = ? AND expires_at > ?", strings.ToUpper(req.Code), "password_reset", time.Now().UTC()).
 		Scan(ctx)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 			Error:   "invalid_code",
 			Message: "Invalid or expired reset code",
 		})
@@ -341,7 +342,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "hash_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "hash_error"})
 		return
 	}
 
@@ -351,7 +352,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		Where("account_id = ?", otp.Metadata).
 		Exec(ctx)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "update_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "update_error"})
 		return
 	}
 
@@ -361,7 +362,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 	var req models.DeleteAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
 		})
@@ -382,7 +383,7 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 	if err == nil {
 		// Has native account — verify password
 		if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.Password)); err != nil {
-			c.JSON(http.StatusUnauthorized, models.ErrorResponse{
+			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 				Error:   "invalid_password",
 				Message: "Password is incorrect",
 			})
@@ -409,7 +410,7 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 		return err
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "deletion_failed"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "deletion_failed"})
 		return
 	}
 

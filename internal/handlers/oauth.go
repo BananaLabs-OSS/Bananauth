@@ -14,6 +14,7 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	"github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
@@ -65,7 +66,7 @@ func NewOAuthHandler(db *bun.DB, sm *sessions.Manager, discord *oauth2.Config) *
 func (h *OAuthHandler) DiscordAuthorize(c *gin.Context) {
 	state, err := generateState()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "state_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "state_error"})
 		return
 	}
 
@@ -91,7 +92,7 @@ func (h *OAuthHandler) DiscordCallback(c *gin.Context) {
 	h.mu.Unlock()
 
 	if !exists || time.Now().After(expiry) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_state",
 			Message: "OAuth state mismatch or expired",
 		})
@@ -104,7 +105,7 @@ func (h *OAuthHandler) DiscordCallback(c *gin.Context) {
 	token, err := h.discord.Exchange(ctx, code)
 	if err != nil {
 		log.Printf("OAuth exchange error: %v", err)
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "exchange_failed",
 			Message: "Failed to exchange OAuth code",
 		})
@@ -114,7 +115,7 @@ func (h *OAuthHandler) DiscordCallback(c *gin.Context) {
 	// Fetch Discord user info
 	discordUser, err := fetchDiscordUser(ctx, token.AccessToken)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{
 			Error:   "provider_error",
 			Message: "Failed to fetch user info from Discord",
 		})
@@ -132,7 +133,7 @@ func (h *OAuthHandler) DiscordCallback(c *gin.Context) {
 	if err == nil {
 		sessionToken, expiresIn, err := h.sessions.Create(existingLink.AccountID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "session_error"})
+			c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "session_error"})
 			return
 		}
 
@@ -173,13 +174,13 @@ func (h *OAuthHandler) DiscordCallback(c *gin.Context) {
 		return nil
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "creation_failed"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "creation_failed"})
 		return
 	}
 
 	sessionToken, expiresIn, err := h.sessions.Create(account.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "session_error"})
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "session_error"})
 		return
 	}
 
