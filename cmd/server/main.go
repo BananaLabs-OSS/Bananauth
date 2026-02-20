@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/bananalabs-oss/bananauth/internal/config"
-	"github.com/bananalabs-oss/bananauth/internal/database"
 	"github.com/bananalabs-oss/bananauth/internal/handlers"
 	"github.com/bananalabs-oss/bananauth/internal/middleware"
+	"github.com/bananalabs-oss/bananauth/internal/models"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	"github.com/bananalabs-oss/potassium/database"
+	"github.com/bananalabs-oss/potassium/server"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/oauth2"
 )
@@ -32,7 +30,21 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := database.Migrate(ctx, db); err != nil {
+	if err := database.Migrate(ctx, db, []interface{}{
+		(*models.Account)(nil),
+		(*models.NativeAccount)(nil),
+		(*models.OAuthLink)(nil),
+		(*models.OTPCode)(nil),
+		(*models.Profile)(nil),
+	}, []database.Index{
+		{Name: "idx_auth_native_email", Query: "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_native_email ON auth_native (email)"},
+		{Name: "idx_auth_native_username", Query: "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_native_username ON auth_native (username)"},
+		{Name: "idx_auth_native_account", Query: "CREATE INDEX IF NOT EXISTS idx_auth_native_account ON auth_native (account_id)"},
+		{Name: "idx_auth_oauth_account", Query: "CREATE INDEX IF NOT EXISTS idx_auth_oauth_account ON auth_oauth (account_id)"},
+		{Name: "idx_auth_oauth_provider", Query: "CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_oauth_provider ON auth_oauth (provider, provider_id)"},
+		{Name: "idx_auth_otp_code", Query: "CREATE INDEX IF NOT EXISTS idx_auth_otp_code ON auth_otp_codes (code, type)"},
+		{Name: "idx_auth_otp_email", Query: "CREATE INDEX IF NOT EXISTS idx_auth_otp_email ON auth_otp_codes (email)"},
+	}); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
@@ -104,29 +116,5 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
-	}
-
-	go func() {
-		log.Printf("Bananauth listening on %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	log.Printf("Shutting down Bananauth...")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	log.Printf("Bananauth stopped")
+	server.ListenAndShutdown(addr, router, "Bananauth")
 }
