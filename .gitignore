@@ -30,6 +30,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
-bananauth.db 
-bananauth.db-shm 
-bananauth.db-wal 
+*.db
+*.db-shm
+*.db-wal
