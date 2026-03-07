@@ -201,7 +201,10 @@ func fetchDiscordUser(ctx context.Context, accessToken string) (*DiscordUser, er
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read discord response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("discord API error: %s", string(body))

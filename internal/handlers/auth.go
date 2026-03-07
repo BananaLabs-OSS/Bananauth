@@ -396,8 +396,10 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 		// Profile
 		_, _ = tx.NewDelete().Model((*models.Profile)(nil)).Where("account_id = ?", accountID).Exec(ctx)
 
-		// OTP codes
-		_, _ = tx.NewDelete().Model((*models.OTPCode)(nil)).Where("email = ?", native.Email).Exec(ctx)
+		// OTP codes (use native.Email if available, otherwise skip — OAuth-only accounts have no OTP codes)
+		if native.Email != "" {
+			_, _ = tx.NewDelete().Model((*models.OTPCode)(nil)).Where("email = ?", native.Email).Exec(ctx)
+		}
 
 		// OAuth links
 		_, _ = tx.NewDelete().Model((*models.OAuthLink)(nil)).Where("account_id = ?", accountID).Exec(ctx)
@@ -415,7 +417,9 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 	}
 
 	// Revoke current session
-	h.sessions.Revoke(sessionID.(string))
+	if sid, ok := sessionID.(string); ok {
+		h.sessions.Revoke(sid)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "account deleted"})
 }
