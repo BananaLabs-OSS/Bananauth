@@ -1,0 +1,22 @@
+name = "bananauth"
+version = "0.1.0"
+wasm = "bananauth.wasm"
+
+capabilities = [
+    "transport.http.inbound",
+    "transport.http.outbound",
+    "storage.sqlite",
+]
+
+[config]
+jwt_secret = "dev-jwt-secret-change-me"
+token_expiry_minutes = 1440
+
+discord_client_id = ""
+discord_client_secret = ""
+discord_redirect_url = ""
+
+# Resend API for password-reset emails. Leave blank to log OTP codes
+# to stdout instead (dev mode).
+resend_api_key = ""
+resend_from = "no-reply@example.com"

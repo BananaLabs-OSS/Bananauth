@@ -33,3 +33,6 @@ go.work.sum
 *.db
 *.db-shm
 *.db-wal
+
+pulp-plugin/*.wasm
+pulp-plugin/data/
