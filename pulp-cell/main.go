@@ -1,11 +1,11 @@
-// Bananauth — Pulp plugin port.
+// Bananauth — Pulp cell port.
 //
 // Identity + authentication service: native (email/password + JWT +
 // session revocation) and OAuth (Discord). All outbound HTTP to
 // OAuth providers goes through pulp.HTTP.Fetch; password hashing uses
 // golang.org/x/crypto/bcrypt (pure Go — works under wasip1). Email
 // delivery (password reset OTP) goes through Resend's REST API when
-// configured, otherwise the OTP is printed to plugin stdout for dev.
+// configured, otherwise the OTP is printed to cell stdout for dev.
 //
 // Build:
 //
@@ -17,6 +17,7 @@ import (
 	dsql "database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -45,6 +46,9 @@ func bootstrap(configBytes []byte) error {
 	if err != nil {
 		return fmt.Errorf("open pulp sql driver: %w", err)
 	}
+	// Match host single-writer pool; prevents nested-BEGIN races.
+	raw.SetMaxOpenConns(1)
+	raw.SetMaxIdleConns(1)
 	db = bun.NewDB(raw, sqlitedialect.New())
 
 	if err := migrate(context.Background()); err != nil {
@@ -55,11 +59,12 @@ func bootstrap(configBytes []byte) error {
 
 	// sendEmail wires the password-reset OTP through Resend's REST
 	// API via pulp.HTTP.Fetch. When the API key is unset (dev mode)
-	// the OTP is printed to plugin stdout instead so local testing
+	// the OTP is printed to cell stdout instead so local testing
 	// can still exercise the reset flow.
 	sendEmail := func(to, code string) error {
 		if cfg.ResendAPIKey == "" {
-			fmt.Printf("[bananauth] password reset OTP for %s: %s\n", to, code)
+			// Parity with native Bananauth/internal/handlers/auth.go:306.
+			log.Printf("Password reset OTP for %s: %s", to, code)
 			return nil
 		}
 		body, _ := json.Marshal(map[string]any{

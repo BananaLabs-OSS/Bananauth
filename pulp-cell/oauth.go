@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sync"
@@ -18,7 +19,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// DiscordOAuthConfig holds the per-plugin Discord OAuth credentials.
+// DiscordOAuthConfig holds the per-cell Discord OAuth credentials.
 // Set via manifest [config] — empty ClientID/Secret disables the flow.
 type DiscordOAuthConfig struct {
 	ClientID     string
@@ -53,7 +54,7 @@ func NewOAuthHandler(db *bun.DB, sm *SessionManager, discord DiscordOAuthConfig)
 
 // pruneStates removes expired OAuth state entries. Called lazily at
 // the start of Authorize / Callback so we do not need a background
-// goroutine (plugin runtime is step-driven, not concurrent).
+// goroutine (cell runtime is step-driven, not concurrent).
 func (h *OAuthHandler) pruneStates() {
 	now := time.Now()
 	h.mu.Lock()
@@ -107,13 +108,25 @@ func (h *OAuthHandler) DiscordCallback(c *pulpgin.Context) {
 
 	accessToken, err := exchangeDiscordCode(h.discord, code)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "exchange_failed", Message: err.Error()})
+		// Match native: swallow underlying error text and log it instead.
+		// Exposing err.Error() leaks Discord response bodies / internal
+		// fetch errors to the client.
+		// Parity with native Bananauth/internal/handlers/oauth.go:107.
+		log.Printf("OAuth exchange error: %v", err)
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
+			Error:   "exchange_failed",
+			Message: "Failed to exchange OAuth code",
+		})
 		return
 	}
 
 	discordUser, err := fetchDiscordUser(accessToken)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "provider_error", Message: err.Error()})
+		// Match native: static message, no underlying error leak.
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{
+			Error:   "provider_error",
+			Message: "Failed to fetch user info from Discord",
+		})
 		return
 	}
 
@@ -183,7 +196,7 @@ type discordUserInfo struct {
 // exchangeDiscordCode posts to Discord's token endpoint with the
 // authorization code and returns the access token. Replaces the
 // golang.org/x/oauth2 package's Exchange, which internally uses
-// net/http and does not work inside a WASM plugin — we route through
+// net/http and does not work inside a WASM cell — we route through
 // pulp.HTTP.Fetch instead.
 func exchangeDiscordCode(cfg DiscordOAuthConfig, code string) (string, error) {
 	form := url.Values{

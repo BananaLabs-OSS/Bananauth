@@ -24,6 +24,10 @@ func (h *ProfileHandler) Create(c *pulpgin.Context) {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
+	if err := validateRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
 
 	accountID, _ := c.Get("account_id")
 	ctx := c.Ctx()
@@ -65,6 +69,10 @@ func (h *ProfileHandler) Get(c *pulpgin.Context) {
 func (h *ProfileHandler) Update(c *pulpgin.Context) {
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
+	if err := validateRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}

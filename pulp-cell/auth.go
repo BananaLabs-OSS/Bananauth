@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -29,6 +29,13 @@ func NewAuthHandler(db *bun.DB, sm *SessionManager, sendEmail func(string, strin
 func (h *AuthHandler) Register(c *pulpgin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
+			Error:   "invalid_request",
+			Message: err.Error(),
+		})
+		return
+	}
+	if err := validateRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
 			Error:   "invalid_request",
 			Message: err.Error(),
@@ -111,6 +118,10 @@ func (h *AuthHandler) Login(c *pulpgin.Context) {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
+	if err := validateRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
 
 	ctx := c.Ctx()
 
@@ -161,6 +172,10 @@ func (h *AuthHandler) ChangePassword(c *pulpgin.Context) {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
+	if err := validateRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
 
 	accountID, _ := c.Get("account_id")
 	ctx := c.Ctx()
@@ -198,6 +213,10 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
+	if err := validateRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
 
 	ctx := c.Ctx()
 	successResponse := pulpgin.H{"message": "if an account exists, a reset code has been sent"}
@@ -230,7 +249,8 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 	if h.sendEmail != nil {
 		_ = h.sendEmail(req.Email, code)
 	} else {
-		fmt.Printf("[bananauth] password reset OTP for %s: %s\n", req.Email, code)
+		// Parity with native Bananauth/internal/handlers/auth.go:306.
+		log.Printf("Password reset OTP for %s: %s", req.Email, code)
 	}
 
 	c.JSON(http.StatusOK, successResponse)
@@ -239,6 +259,10 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
+	if err := validateRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
@@ -274,6 +298,10 @@ func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
 func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
 	var req DeleteAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
+		return
+	}
+	if err := validateRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}

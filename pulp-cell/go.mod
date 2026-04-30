@@ -1,4 +1,4 @@
-module bananauth-plugin
+module bananauth-cell
 
 go 1.25
 
