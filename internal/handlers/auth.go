@@ -35,11 +35,23 @@ type AuthHandler struct {
 }
 
 func NewAuthHandler(db *bun.DB, sm *sessions.Manager, sendEmail func(string, string) error) *AuthHandler {
-	return &AuthHandler{
+	h := &AuthHandler{
 		db:        db,
 		sessions:  sm,
 		sendEmail: sendEmail,
 	}
+
+	// Periodically clean up expired OTP codes
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			h.db.NewDelete().Model((*models.OTPCode)(nil)).
+				Where("expires_at < ?", time.Now().UTC()).
+				Exec(context.Background())
+		}
+	}()
+
+	return h
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -58,6 +70,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	ctx := c.Request.Context()
 
@@ -166,6 +179,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	ctx := c.Request.Context()
 
@@ -293,6 +307,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	ctx := c.Request.Context()
 	successResponse := gin.H{"message": "if an account exists, a reset code has been sent"}
@@ -356,13 +371,23 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	ctx := c.Request.Context()
 
+	// Use a transaction to atomically SELECT + DELETE the OTP (TOCTOU fix)
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "database_error"})
+		return
+	}
+	defer tx.Rollback()
+
 	var otp models.OTPCode
-	err := h.db.NewSelect().
+	err = tx.NewSelect().
 		Model(&otp).
-		Where("code = ? AND type = ? AND expires_at > ?", strings.ToUpper(req.Code), "password_reset", time.Now().UTC()).
+		Where("code = ? AND type = ? AND expires_at > ? AND email = ?",
+			strings.ToUpper(req.Code), "password_reset", time.Now().UTC(), req.Email).
 		Scan(ctx)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
@@ -372,11 +397,16 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	// Delete used OTP
-	_, _ = h.db.NewDelete().
+	// Delete used OTP within the same transaction
+	_, _ = tx.NewDelete().
 		Model((*models.OTPCode)(nil)).
 		Where("id = ?", otp.ID).
 		Exec(ctx)
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "database_error"})
+		return
+	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -424,6 +454,28 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 				Error:   "invalid_password",
 				Message: "Password is incorrect",
+			})
+			return
+		}
+	} else {
+		// OAuth-only account — verify by email match
+		var oauthLink models.OAuthLink
+		oauthErr := h.db.NewSelect().
+			Model(&oauthLink).
+			Where("account_id = ?", accountID).
+			Limit(1).
+			Scan(ctx)
+		if oauthErr != nil {
+			c.JSON(http.StatusNotFound, middleware.ErrorResponse{
+				Error:   "not_found",
+				Message: "No account found",
+			})
+			return
+		}
+		if !strings.EqualFold(oauthLink.ProviderEmail, req.Email) {
+			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
+				Error:   "invalid_email",
+				Message: "Email does not match account",
 			})
 			return
 		}

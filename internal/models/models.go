@@ -64,12 +64,14 @@ type ForgotPasswordRequest struct {
 }
 
 type ResetPasswordRequest struct {
+	Email       string `json:"email" binding:"required,email"`
 	Code        string `json:"code" binding:"required"`
 	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
 type DeleteAccountRequest struct {
-	Password string `json:"password" binding:"required"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
 }
 
 type Profile struct {

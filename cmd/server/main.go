@@ -67,7 +67,7 @@ func main() {
 				TokenURL: "https://discord.com/api/oauth2/token",
 			},
 		}
-		oauthHandler = handlers.NewOAuthHandler(db, sm, discordConfig)
+		oauthHandler = handlers.NewOAuthHandler(ctx, db, sm, discordConfig)
 	}
 
 	router := gin.Default()

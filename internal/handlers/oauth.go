@@ -37,7 +37,7 @@ type DiscordUser struct {
 	Email    string `json:"email"`
 }
 
-func NewOAuthHandler(db *bun.DB, sm *sessions.Manager, discord *oauth2.Config) *OAuthHandler {
+func NewOAuthHandler(ctx context.Context, db *bun.DB, sm *sessions.Manager, discord *oauth2.Config) *OAuthHandler {
 	h := &OAuthHandler{
 		db:       db,
 		sessions: sm,
@@ -47,16 +47,22 @@ func NewOAuthHandler(db *bun.DB, sm *sessions.Manager, discord *oauth2.Config) *
 
 	// Clean expired states every minute
 	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(time.Minute)
-			h.mu.Lock()
-			now := time.Now()
-			for state, expiry := range h.states {
-				if now.After(expiry) {
-					delete(h.states, state)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.mu.Lock()
+				now := time.Now()
+				for state, expiry := range h.states {
+					if now.After(expiry) {
+						delete(h.states, state)
+					}
 				}
+				h.mu.Unlock()
 			}
-			h.mu.Unlock()
 		}
 	}()
 
