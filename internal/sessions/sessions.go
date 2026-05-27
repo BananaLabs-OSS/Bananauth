@@ -20,6 +20,8 @@ type session struct {
 	CreatedAt time.Time
 }
 
+// NOTE: Sessions are in-memory only. All users are logged out on restart.
+// TODO: Persist sessions to SQLite for restart survival (AUTH-H2).
 type Manager struct {
 	mu        sync.RWMutex
 	sessions  map[string]session // sessionID -> session
@@ -28,11 +30,28 @@ type Manager struct {
 }
 
 func NewManager(jwtSecret string, expiry time.Duration) *Manager {
-	return &Manager{
+	m := &Manager{
 		sessions:  make(map[string]session),
 		jwtSecret: []byte(jwtSecret),
 		expiry:    expiry,
 	}
+
+	// AUTH-H4: periodic cleanup of expired sessions.
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			cutoff := time.Now().Add(-expiry)
+			m.mu.Lock()
+			for id, s := range m.sessions {
+				if s.CreatedAt.Before(cutoff) {
+					delete(m.sessions, id)
+				}
+			}
+			m.mu.Unlock()
+		}
+	}()
+
+	return m
 }
 
 // Secret returns the JWT signing key.

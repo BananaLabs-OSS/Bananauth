@@ -6,7 +6,9 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
@@ -16,6 +18,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 	"golang.org/x/crypto/bcrypt"
+)
+
+// Rate limiters — per-IP sync.Map storing last request time.
+var (
+	registerRL       sync.Map // ip -> time.Time
+	loginRL          sync.Map // ip -> time.Time
+	forgotPwRL       sync.Map // ip -> time.Time
+	resetPwRL        sync.Map // ip -> time.Time
 )
 
 type AuthHandler struct {
@@ -33,6 +43,13 @@ func NewAuthHandler(db *bun.DB, sm *sessions.Manager, sendEmail func(string, str
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
+	ip := c.ClientIP()
+	if last, ok := registerRL.Load(ip); ok && time.Since(last.(time.Time)) < 60*time.Second {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "rate_limited", Message: "Please wait before registering again"})
+		return
+	}
+	registerRL.Store(ip, time.Now())
+
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
@@ -134,6 +151,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
+	ip := c.ClientIP()
+	if last, ok := loginRL.Load(ip); ok && time.Since(last.(time.Time)) < 10*time.Second {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "rate_limited", Message: "Please wait before trying again"})
+		return
+	}
+	loginRL.Store(ip, time.Now())
+
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
@@ -254,6 +278,13 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 }
 
 func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	ip := c.ClientIP()
+	if last, ok := forgotPwRL.Load(ip); ok && time.Since(last.(time.Time)) < 60*time.Second {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "rate_limited", Message: "Please wait before requesting another code"})
+		return
+	}
+	forgotPwRL.Store(ip, time.Now())
+
 	var req models.ForgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
@@ -302,7 +333,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 
 	if h.sendEmail != nil {
 		_ = h.sendEmail(req.Email, code)
-	} else {
+	} else if os.Getenv("DEV_MODE") == "true" {
 		log.Printf("Password reset OTP for %s: %s", req.Email, code)
 	}
 
@@ -310,6 +341,13 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 }
 
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	ip := c.ClientIP()
+	if last, ok := resetPwRL.Load(ip); ok && time.Since(last.(time.Time)) < 10*time.Second {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "rate_limited", Message: "Please wait before trying again"})
+		return
+	}
+	resetPwRL.Store(ip, time.Now())
+
 	var req models.ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
