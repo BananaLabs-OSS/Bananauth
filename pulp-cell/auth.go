@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
@@ -14,6 +15,27 @@ import (
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 	"golang.org/x/crypto/bcrypt"
+)
+
+// normalizeEmail canonicalizes an email for storage and lookup so that
+// case/whitespace variants of the same address collide on the unique
+// index instead of creating duplicate accounts. Mirrors native
+// Bananauth/internal/handlers/auth.go.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// Per-IP reset throttle + per-email bad-attempt cap for the
+// password-reset OTP path. The cell runtime is step-driven (single
+// goroutine), but a sync.Map keeps this safe regardless and matches the
+// native per-IP limiter (AUTH-H1). Entries are lazily overwritten; the
+// map is bounded by the active attacker IP / target email set and reset
+// on cell restart.
+var (
+	resetPwRL     sync.Map // ip -> time.Time (last reset attempt)
+	resetPwFails  sync.Map // normalized email -> failCount
+	resetPwWindow = 10 * time.Second
+	resetPwMaxTry = 5
 )
 
 type AuthHandler struct {
@@ -42,6 +64,8 @@ func (h *AuthHandler) Register(c *pulpgin.Context) {
 		})
 		return
 	}
+
+	req.Email = normalizeEmail(req.Email)
 
 	ctx := c.Ctx()
 
@@ -122,6 +146,8 @@ func (h *AuthHandler) Login(c *pulpgin.Context) {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
+
+	req.Email = normalizeEmail(req.Email)
 
 	ctx := c.Ctx()
 
@@ -218,6 +244,8 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 		return
 	}
 
+	req.Email = normalizeEmail(req.Email)
+
 	ctx := c.Ctx()
 	successResponse := pulpgin.H{"message": "if an account exists, a reset code has been sent"}
 
@@ -267,18 +295,50 @@ func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
 		return
 	}
 
+	// Per-IP throttle (AUTH-H1 parity): blunt the brute-force rate.
+	ip := c.ClientIP()
+	if last, ok := resetPwRL.Load(ip); ok && time.Since(last.(time.Time)) < resetPwWindow {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "rate_limited", Message: "Please wait before trying again"})
+		return
+	}
+	resetPwRL.Store(ip, time.Now())
+
+	req.Email = normalizeEmail(req.Email)
+
+	// Per-email bad-attempt cap: after too many wrong codes, lock the
+	// target out of further guesses until a new code is requested.
+	if n, ok := resetPwFails.Load(req.Email); ok && n.(int) >= resetPwMaxTry {
+		c.JSON(http.StatusTooManyRequests, middleware.ErrorResponse{Error: "too_many_attempts", Message: "Too many invalid attempts; request a new code"})
+		return
+	}
+
 	ctx := c.Ctx()
 
+	// Atomically SELECT + DELETE the OTP within one transaction so a
+	// code is single-use even under concurrency (AUTH-M3 TOCTOU fix),
+	// and scope the lookup to the requesting email so a code cannot
+	// match another user's account globally (AUTH-M2).
 	var otp OTPCode
-	err := h.db.NewSelect().Model(&otp).
-		Where("code = ? AND type = ? AND expires_at > ?", strings.ToUpper(req.Code), "password_reset", time.Now().UTC()).
-		Scan(ctx)
+	err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := tx.NewSelect().Model(&otp).
+			Where("code = ? AND type = ? AND email = ? AND expires_at > ?",
+				strings.ToUpper(req.Code), "password_reset", req.Email, time.Now().UTC()).
+			Scan(ctx); err != nil {
+			return err
+		}
+		_, err := tx.NewDelete().Model((*OTPCode)(nil)).Where("id = ?", otp.ID).Exec(ctx)
+		return err
+	})
 	if err != nil {
+		// Count the failed guess against the target email.
+		cur, _ := resetPwFails.LoadOrStore(req.Email, 0)
+		resetPwFails.Store(req.Email, cur.(int)+1)
 		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{Error: "invalid_code", Message: "Invalid or expired reset code"})
 		return
 	}
 
-	_, _ = h.db.NewDelete().Model((*OTPCode)(nil)).Where("id = ?", otp.ID).Exec(ctx)
+	// Successful consume — clear the bad-attempt counter for this email.
+	resetPwFails.Delete(req.Email)
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
@@ -313,8 +373,23 @@ func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
 	var native NativeAccount
 	err := h.db.NewSelect().Model(&native).Where("account_id = ?", accountID).Scan(ctx)
 	if err == nil {
+		// Native account — verify the password.
 		if err := bcrypt.CompareHashAndPassword([]byte(native.PasswordHash), []byte(req.Password)); err != nil {
 			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{Error: "invalid_password", Message: "Password is incorrect"})
+			return
+		}
+	} else {
+		// OAuth-only account — verify ownership by matching the
+		// provider email (AUTH-M4 parity). Never allow deletion with
+		// no credential proof.
+		var oauthLink OAuthLink
+		oauthErr := h.db.NewSelect().Model(&oauthLink).Where("account_id = ?", accountID).Limit(1).Scan(ctx)
+		if oauthErr != nil {
+			c.JSON(http.StatusNotFound, middleware.ErrorResponse{Error: "not_found", Message: "No account found"})
+			return
+		}
+		if req.Email == "" || !strings.EqualFold(oauthLink.ProviderEmail, normalizeEmail(req.Email)) {
+			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{Error: "invalid_email", Message: "Email does not match account"})
 			return
 		}
 	}

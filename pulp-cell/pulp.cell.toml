@@ -6,6 +6,7 @@ capabilities = [
     "transport.http.inbound",
     "transport.http.outbound",
     "storage.sqlite",
+    "entropy.read",
 ]
 
 [config]

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BananaLabs-OSS/Fiber/pulp"
+	_ "github.com/BananaLabs-OSS/Fiber/pulp/entropy/cryptorand" // wires entropy.read into crypto/rand.Reader
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
 	_ "github.com/BananaLabs-OSS/Fiber/pulp/sql"
 	"github.com/uptrace/bun"
