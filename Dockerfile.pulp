@@ -1,0 +1,48 @@
+# Bananauth — standalone Pulp-cell container (the "microservice" half of the
+# two-host split). Mirror of pomodoro-timer/Dockerfile, minus the frontend
+# embed — bananauth ships no frontend; it only serves the /auth/* API.
+#
+# Build context is the PARENT directory (the Go modules use local
+# `replace => ../../{Fiber,Pulp,Pulp-ext-*}`):
+#
+#   docker build -f Bananauth/Dockerfile.pulp -t bananauth:latest .
+#
+# (run from the GolandProjects parent dir, or via the split compose which sets
+# context: ..). Named Dockerfile.pulp to avoid clobbering the legacy native
+# Dockerfile (the old cmd/server build).
+
+# ---- Stage 1: build the cell to wasip1 WASM ----
+FROM golang:1.25 AS cell
+WORKDIR /src
+# pulp-cell/go.mod: `replace github.com/BananaLabs-OSS/Fiber => ../../Fiber`
+COPY Fiber/ Fiber/
+COPY Bananauth/pulp-cell/ Bananauth/pulp-cell/
+WORKDIR /src/Bananauth/pulp-cell
+RUN GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o bananauth.wasm .
+
+# ---- Stage 2: build the Pulp host (pure Go → static, CGO off) ----
+FROM golang:1.25 AS host
+WORKDIR /src
+COPY Pulp/ Pulp/
+COPY Pulp-ext-entropy/ Pulp-ext-entropy/
+COPY Pulp-ext-http/ Pulp-ext-http/
+COPY Pulp-ext-sqlite/ Pulp-ext-sqlite/
+COPY Bananauth/pulp-deployment/ Bananauth/pulp-deployment/
+WORKDIR /src/Bananauth/pulp-deployment
+RUN CGO_ENABLED=0 go build -o /out/bananauth-host .
+
+# ---- Stage 3: runtime ----
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+WORKDIR /app
+COPY --from=host /out/bananauth-host          /app/bananauth-host
+COPY --from=cell /src/Bananauth/pulp-cell/bananauth.wasm /app/cell/bananauth.wasm
+COPY Bananauth/pulp-cell/pulp.cell.toml       /app/cell/pulp.cell.toml
+COPY Bananauth/docker-entrypoint.sh           /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh && mkdir -p /app/data
+
+# JWT_SECRET must match the bananadoro deployment so issued tokens verify there.
+ENV HTTP_PORT=3000
+EXPOSE 3000
+VOLUME ["/app/data"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

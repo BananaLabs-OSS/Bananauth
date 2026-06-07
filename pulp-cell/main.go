@@ -112,6 +112,12 @@ func bootstrap(configBytes []byte) error {
 
 	// Public (no auth)
 	auth := r.Group("/auth")
+	// Config seam: advertise the enabled login methods so a frontend renders
+	// only what this deployment exposes. Driven by the `auth_methods` manifest
+	// key (resolved/filtered in parseConfig).
+	auth.GET("/config", func(c *pulpgin.Context) {
+		c.JSON(http.StatusOK, pulpgin.H{"methods": cfg.AuthMethods})
+	})
 	auth.POST("/register", authH.Register)
 	auth.POST("/login", authH.Login)
 	auth.POST("/password/forgot", authH.ForgotPassword)
@@ -207,6 +213,54 @@ type config struct {
 
 	ResendAPIKey string
 	ResendFrom   string
+
+	// AuthMethods is the ordered list of login methods this deployment
+	// exposes — the config seam. The public GET /auth/config advertises it
+	// so a frontend renders only the enabled methods. Apps flip methods on
+	// here without any frontend code change. Known values: "password",
+	// "discord" (built); "passwordless", "totp", "passkey" (future).
+	AuthMethods []string
+}
+
+// knownAuthMethods is every method Bananauth recognizes. Unknown values in
+// the manifest are dropped so a typo can't silently advertise a method the
+// backend can't service.
+var knownAuthMethods = map[string]bool{
+	"password": true,
+	"discord":  true,
+}
+
+// defaultAuthMethods derives the method list when the manifest omits
+// auth_methods: password is always available; discord only when its OAuth
+// app is configured.
+func defaultAuthMethods(cfg config) []string {
+	methods := []string{"password"}
+	if cfg.DiscordClientID != "" && cfg.DiscordClientSecret != "" {
+		methods = append(methods, "discord")
+	}
+	return methods
+}
+
+// resolveAuthMethods filters the requested list to methods Bananauth can
+// actually service (built + properly configured), preserving order.
+func resolveAuthMethods(requested []string, cfg config) []string {
+	if len(requested) == 0 {
+		return defaultAuthMethods(cfg)
+	}
+	out := make([]string, 0, len(requested))
+	for _, m := range requested {
+		if !knownAuthMethods[m] {
+			continue
+		}
+		if m == "discord" && (cfg.DiscordClientID == "" || cfg.DiscordClientSecret == "") {
+			continue // advertised but not configured — drop it
+		}
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return defaultAuthMethods(cfg)
+	}
+	return out
 }
 
 func parseConfig(data []byte) (config, error) {
@@ -219,13 +273,14 @@ func parseConfig(data []byte) (config, error) {
 		return cfg, err
 	}
 	var tmp struct {
-		JWTSecret           string `json:"jwt_secret"`
-		TokenExpiryMinutes  int64  `json:"token_expiry_minutes"`
-		DiscordClientID     string `json:"discord_client_id"`
-		DiscordClientSecret string `json:"discord_client_secret"`
-		DiscordRedirectURL  string `json:"discord_redirect_url"`
-		ResendAPIKey        string `json:"resend_api_key"`
-		ResendFrom          string `json:"resend_from"`
+		JWTSecret           string   `json:"jwt_secret"`
+		TokenExpiryMinutes  int64    `json:"token_expiry_minutes"`
+		DiscordClientID     string   `json:"discord_client_id"`
+		DiscordClientSecret string   `json:"discord_client_secret"`
+		DiscordRedirectURL  string   `json:"discord_redirect_url"`
+		ResendAPIKey        string   `json:"resend_api_key"`
+		ResendFrom          string   `json:"resend_from"`
+		AuthMethods         []string `json:"auth_methods"`
 	}
 	jbytes, _ := json.Marshal(raw)
 	if err := json.Unmarshal(jbytes, &tmp); err != nil {
@@ -238,7 +293,7 @@ func parseConfig(data []byte) (config, error) {
 	if expiry == 0 {
 		expiry = 24 * time.Hour
 	}
-	return config{
+	cfg = config{
 		JWTSecret:           tmp.JWTSecret,
 		TokenExpiry:         expiry,
 		DiscordClientID:     tmp.DiscordClientID,
@@ -246,5 +301,9 @@ func parseConfig(data []byte) (config, error) {
 		DiscordRedirectURL:  tmp.DiscordRedirectURL,
 		ResendAPIKey:        tmp.ResendAPIKey,
 		ResendFrom:          tmp.ResendFrom,
-	}, nil
+	}
+	// Resolve after the rest of cfg is built — discord eligibility depends
+	// on the OAuth fields above.
+	cfg.AuthMethods = resolveAuthMethods(tmp.AuthMethods, cfg)
+	return cfg, nil
 }

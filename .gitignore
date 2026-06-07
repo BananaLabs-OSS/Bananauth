@@ -36,3 +36,8 @@ go.work.sum
 
 pulp-cell/*.wasm
 pulp-cell/data/
+
+# Pulp deployment build/runtime artifacts
+pulp-deployment/*.wasm
+pulp-deployment/data/
+pulp.ctl

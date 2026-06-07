@@ -13,6 +13,14 @@ capabilities = [
 jwt_secret = "dev-jwt-secret-change-me"
 token_expiry_minutes = 1440
 
+# Config seam: the login methods this deployment exposes, in display order.
+# The public GET /auth/config advertises this list so a frontend renders only
+# the enabled methods. Unknown or unconfigured methods are dropped at load.
+# Built today: "password", "discord". Future flags (need backend work first):
+# "passwordless", "totp", "passkey". Omit/empty = password (+ discord if its
+# OAuth app is configured below).
+auth_methods = ["password", "discord"]
+
 discord_client_id = ""
 discord_client_secret = ""
 discord_redirect_url = ""

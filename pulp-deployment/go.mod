@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/BananaLabs-OSS/Pulp v0.0.0
+	github.com/BananaLabs-OSS/Pulp-ext-entropy v0.0.0
 	github.com/BananaLabs-OSS/Pulp-ext-http v0.0.0
 	github.com/BananaLabs-OSS/Pulp-ext-sqlite v0.0.0
 )
@@ -28,6 +29,7 @@ require (
 
 replace (
 	github.com/BananaLabs-OSS/Pulp => ../../Pulp
+	github.com/BananaLabs-OSS/Pulp-ext-entropy => ../../Pulp-ext-entropy
 	github.com/BananaLabs-OSS/Pulp-ext-http => ../../Pulp-ext-http
 	github.com/BananaLabs-OSS/Pulp-ext-sqlite => ../../Pulp-ext-sqlite
 )
