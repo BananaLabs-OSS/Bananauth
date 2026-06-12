@@ -286,8 +286,8 @@ func parseConfig(data []byte) (config, error) {
 	if err := json.Unmarshal(jbytes, &tmp); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
 	}
-	if tmp.JWTSecret == "" {
-		return cfg, fmt.Errorf("jwt_secret missing from [config]")
+	if tmp.JWTSecret == "" || tmp.JWTSecret == "dev-jwt-secret-change-me" {
+		return cfg, fmt.Errorf("jwt_secret missing or still set to the default placeholder — set a real secret before deploying")
 	}
 	expiry := time.Duration(tmp.TokenExpiryMinutes) * time.Minute
 	if expiry == 0 {
