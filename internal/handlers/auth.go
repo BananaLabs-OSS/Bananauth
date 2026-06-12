@@ -472,7 +472,7 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 			})
 			return
 		}
-		if !strings.EqualFold(oauthLink.ProviderEmail, req.Email) {
+		if req.Email == "" || !strings.EqualFold(oauthLink.ProviderEmail, req.Email) {
 			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{
 				Error:   "invalid_email",
 				Message: "Email does not match account",

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -146,6 +148,15 @@ func (h *OAuthHandler) DiscordCallback(c *pulpgin.Context) {
 			AccessToken: sessionToken,
 			ExpiresIn:   expiresIn,
 			AccountID:   existingLink.AccountID.String(),
+		})
+		return
+	}
+	// Only create a new account if the record genuinely doesn't exist — a
+	// transient DB error must not silently mint a duplicate account.
+	if !errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{
+			Error:   "provider_error",
+			Message: "Failed to process authentication",
 		})
 		return
 	}
