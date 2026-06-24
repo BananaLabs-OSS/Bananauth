@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
 	"log"
-	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -328,7 +327,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		Where("email = ? AND type = ?", req.Email, "password_reset").
 		Exec(ctx)
 
-	code := generateOTP()
+	code := authcrypto.GenerateOTP()
 	now := time.Now().UTC()
 
 	otp := models.OTPCode{
@@ -514,12 +513,3 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "account deleted"})
 }
 
-func generateOTP() string {
-	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 6)
-	for i := range b {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		b[i] = chars[n.Int64()]
-	}
-	return string(b)
-}

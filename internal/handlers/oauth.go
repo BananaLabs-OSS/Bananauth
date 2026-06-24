@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/models"
 	"github.com/bananalabs-oss/bananauth/internal/sessions"
+	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/bananalabs-oss/potassium/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -70,7 +69,7 @@ func NewOAuthHandler(ctx context.Context, db *bun.DB, sm *sessions.Manager, disc
 }
 
 func (h *OAuthHandler) DiscordAuthorize(c *gin.Context) {
-	state, err := generateState()
+	state, err := authcrypto.GenerateState()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "state_error"})
 		return
@@ -224,10 +223,3 @@ func fetchDiscordUser(ctx context.Context, accessToken string) (*DiscordUser, er
 	return &user, nil
 }
 
-func generateState() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(b), nil
-}

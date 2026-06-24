@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"github.com/BananaLabs-OSS/Fiber/pulp"
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
 	"github.com/BananaLabs-OSS/Fiber/pulp/gin/middleware"
+	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 )
@@ -71,7 +70,7 @@ func (h *OAuthHandler) pruneStates() {
 func (h *OAuthHandler) DiscordAuthorize(c *pulpgin.Context) {
 	h.pruneStates()
 
-	state, err := generateState()
+	state, err := authcrypto.GenerateState()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, middleware.ErrorResponse{Error: "state_error"})
 		return
@@ -262,10 +261,3 @@ func fetchDiscordUser(accessToken string) (*discordUserInfo, error) {
 	return &u, nil
 }
 
-func generateState() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(b), nil
-}

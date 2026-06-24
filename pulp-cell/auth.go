@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"log"
-	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,6 +10,7 @@ import (
 
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
 	"github.com/BananaLabs-OSS/Fiber/pulp/gin/middleware"
+	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 	"golang.org/x/crypto/bcrypt"
@@ -258,7 +257,7 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 
 	_, _ = h.db.NewDelete().Model((*OTPCode)(nil)).Where("email = ? AND type = ?", req.Email, "password_reset").Exec(ctx)
 
-	code := generateOTP()
+	code := authcrypto.GenerateOTP()
 	now := time.Now().UTC()
 	otp := OTPCode{
 		ID:        uuid.New(),
@@ -416,12 +415,3 @@ func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
 	c.JSON(http.StatusOK, pulpgin.H{"message": "account deleted"})
 }
 
-func generateOTP() string {
-	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 6)
-	for i := range b {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		b[i] = chars[n.Int64()]
-	}
-	return string(b)
-}

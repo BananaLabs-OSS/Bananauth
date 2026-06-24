@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -72,19 +73,7 @@ func (m *Manager) Exists(sessionID string) bool {
 func (m *Manager) Create(accountID uuid.UUID) (string, int, error) {
 	sessionID := uuid.New().String()
 
-	now := time.Now().UTC()
-	claims := Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(m.expiry)),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ID:        sessionID,
-		},
-		AccountID: accountID.String(),
-		SessionID: sessionID,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(m.jwtSecret)
+	signed, err := authcrypto.MintJWT(m.jwtSecret, accountID, sessionID, m.expiry)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to sign token: %w", err)
 	}
@@ -92,7 +81,7 @@ func (m *Manager) Create(accountID uuid.UUID) (string, int, error) {
 	m.mu.Lock()
 	m.sessions[sessionID] = session{
 		AccountID: accountID.String(),
-		CreatedAt: now,
+		CreatedAt: time.Now().UTC(),
 	}
 	m.mu.Unlock()
 
