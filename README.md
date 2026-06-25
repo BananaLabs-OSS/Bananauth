@@ -1,6 +1,6 @@
 # Bananauth
 
-Identity and authentication service with native and OAuth support, JWT sessions, and account linking.
+Identity and authentication service — email/password + Discord OAuth, JWT sessions with revocation, and user profiles. Ships as a [Pulp](https://github.com/BananaLabs-OSS/Pulp) WASM cell.
 
 From [BananaLabs OSS](https://github.com/bananalabs-oss).
 
@@ -10,56 +10,55 @@ Bananauth handles:
 
 - **Native Auth**: Email/password registration and login
 - **OAuth**: Discord login and account creation
-- **Sessions**: JWT tokens with in-memory session tracking and revocation
-- **Password Management**: Change password, forgot/reset via OTP
+- **Sessions**: JWT tokens with in-memory session revocation
+- **Password Management**: Change password, forgot/reset via OTP (Resend)
 - **Account Lifecycle**: Registration, deletion, and session validation
 - **Profiles**: Display name management for platform identity
 
-## Quick Start
+## Repository layout
+
+```
+pkg/authcrypto/   Pure-Go crypto shared between cell and future consumers
+                  (GenerateOTP, GenerateState, MintJWT)
+pulp-cell/        WASM cell source — builds to bananauth.wasm (wasip1/wasm)
+  otpscope/       Pure-Go subpackage: OTP match predicate + regression tests
+  pulp.cell.toml  Cell manifest (capabilities + default config)
+pulp-deployment/  Standalone Pulp host that loads the cell
+Dockerfile.pulp   Multi-stage Docker image (build context = GolandProjects/)
+docker-entrypoint.sh  Injects JWT_SECRET into manifest at container start
+```
+
+## Quick Start (standalone container)
+
+Build context is the **parent directory** of this repo (modules use local `replace` directives):
 
 ```bash
-JWT_SECRET=your-secret-here go run ./cmd/server
+cd /path/to/GolandProjects
+docker build -f Bananauth/Dockerfile.pulp -t bananauth:latest .
+docker run -e JWT_SECRET=your-secret-here -p 3000:3000 bananauth:latest
 ```
 
 ## Configuration
 
-Configuration priority: CLI flags > Environment variables > Defaults
+All config is in `pulp-cell/pulp.cell.toml` (`[config]` section). The entrypoint script injects `JWT_SECRET` from the environment at container start; everything else can be set directly in the manifest.
 
-| Setting               | Env Var                       | CLI Flag                       | Default                 |
-| --------------------- | ----------------------------- | ------------------------------ | ----------------------- |
-| Host                  | `HOST`                        | `-host`                        | `0.0.0.0`               |
-| Port                  | `PORT`                        | `-port`                        | `8001`                  |
-| Database URL          | `DATABASE_URL`                | `-database-url`                | `sqlite://bananauth.db` |
-| JWT Secret            | `JWT_SECRET`                  | `-jwt-secret`                  | _(required)_            |
-| Token Expiry          | `TOKEN_EXPIRY`                | `-token-expiry`                | `1440` (minutes)        |
-| Discord Client ID     | `OAUTH_DISCORD_CLIENT_ID`     | `-oauth-discord-client-id`     | _(optional)_            |
-| Discord Client Secret | `OAUTH_DISCORD_CLIENT_SECRET` | `-oauth-discord-client-secret` | _(optional)_            |
-| Discord Redirect URL  | `OAUTH_DISCORD_REDIRECT_URL`  | `-oauth-discord-redirect-url`  | _(optional)_            |
+| Key                    | Default                          | Notes                                     |
+| ---------------------- | -------------------------------- | ----------------------------------------- |
+| `jwt_secret`           | _(required — placeholder fails)_ | Injected via `JWT_SECRET` env var         |
+| `token_expiry_minutes` | `1440` (24 h)                    |                                           |
+| `auth_methods`         | `["password","discord"]`         | Drop `"discord"` if OAuth not configured  |
+| `discord_client_id`    | `""`                             | Discord OAuth app credential              |
+| `discord_client_secret`| `""`                             | Discord OAuth app credential              |
+| `discord_redirect_url` | `""`                             | Must match Discord app settings           |
+| `resend_api_key`       | `""`                             | Leave blank to log OTP to stdout (dev)    |
+| `resend_from`          | `"no-reply@example.com"`         |                                           |
 
-Discord OAuth is enabled automatically when client ID and secret are provided.
+**Container environment variables** (injected by `docker-entrypoint.sh`):
 
-**CLI:**
-
-```bash
-./bananauth -jwt-secret my-secret -port 8001
-```
-
-**Docker Compose:**
-
-```yaml
-bananauth:
-  image: ghcr.io/bananalabs-oss/bananauth:latest
-  ports:
-    - "8001:8001"
-  volumes:
-    - ./data:/app/data
-  environment:
-    - JWT_SECRET=your-secret-here
-    - DATABASE_URL=sqlite:///app/data/bananauth.db
-    - OAUTH_DISCORD_CLIENT_ID=your-client-id
-    - OAUTH_DISCORD_CLIENT_SECRET=your-client-secret
-    - OAUTH_DISCORD_REDIRECT_URL=https://your-domain/auth/oauth/discord/callback
-```
+| Variable     | Required | Notes                                         |
+| ------------ | -------- | --------------------------------------------- |
+| `JWT_SECRET` | yes      | Shared HS256 secret; must match other services|
+| `HTTP_PORT`  | no       | Default `3000`                                |
 
 ## API Reference
 
@@ -68,6 +67,7 @@ bananauth:
 | Method | Endpoint                       | Description                        |
 | ------ | ------------------------------ | ---------------------------------- |
 | `GET`  | `/health`                      | Health check                       |
+| `GET`  | `/auth/config`                 | Enabled login methods              |
 | `POST` | `/auth/register`               | Create account with email/password |
 | `POST` | `/auth/login`                  | Login with email/password          |
 | `POST` | `/auth/password/forgot`        | Request password reset OTP         |
@@ -90,7 +90,7 @@ bananauth:
 ### Register
 
 ```bash
-curl -X POST http://localhost:8001/auth/register \
+curl -X POST http://localhost:3000/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","username":"player1","password":"securepass"}'
 ```
@@ -102,7 +102,7 @@ curl -X POST http://localhost:8001/auth/register \
 ### Login
 
 ```bash
-curl -X POST http://localhost:8001/auth/login \
+curl -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"securepass"}'
 ```
@@ -114,7 +114,7 @@ curl -X POST http://localhost:8001/auth/login \
 ### Validate Session
 
 ```bash
-curl http://localhost:8001/auth/session \
+curl http://localhost:3000/auth/session \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -125,83 +125,69 @@ curl http://localhost:8001/auth/session \
 ### Password Reset
 
 ```bash
-# Request reset code (logged to console if no email configured)
-curl -X POST http://localhost:8001/auth/password/forgot \
+# 1. Request a reset code
+curl -X POST http://localhost:3000/auth/password/forgot \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com"}'
 
-# Reset with code
-curl -X POST http://localhost:8001/auth/password/reset \
+# 2. Reset with the code (email field is required — scopes the code to your account)
+curl -X POST http://localhost:3000/auth/password/reset \
   -H "Content-Type: application/json" \
-  -d '{"code":"ABC123","new_password":"newsecurepass"}'
+  -d '{"email":"user@example.com","code":"ABC123","new_password":"newsecurepass"}'
 ```
 
 ### Delete Account
 
 ```bash
-curl -X DELETE http://localhost:8001/auth/account \
+# Native account — provide password
+curl -X DELETE http://localhost:3000/auth/account \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"password":"securepass"}'
+
+# OAuth-only account — provide the provider email instead
+curl -X DELETE http://localhost:3000/auth/account \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com"}'
 ```
 
-### Create Profile
+### Create / Update Profile
 
 ```bash
-curl -X POST http://localhost:8001/profiles \
+curl -X POST http://localhost:3000/profiles \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"display_name":"PlayerOne"}'
-```
 
-```json
-{
-  "account_id": "uuid",
-  "display_name": "PlayerOne",
-  "created_at": "...",
-  "updated_at": "..."
-}
-```
-
-### Get Profile
-
-```bash
-curl http://localhost:8001/profiles/<account_id>
-```
-
-### Update Profile
-
-```bash
-curl -X PUT http://localhost:8001/profiles \
+curl -X PUT http://localhost:3000/profiles \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"display_name":"NewName"}'
 ```
 
+### Get Profile
+
+```bash
+curl http://localhost:3000/profiles/<account_id>
+```
+
 ## Database
 
-Bananauth uses SQLite by default. Tables:
+SQLite via the Pulp `storage.sqlite` capability (mounted by the host). Tables are created on first boot:
 
 - `auth_accounts` — Identity records
 - `auth_native` — Email/password credentials
 - `auth_oauth` — OAuth provider links
-- `auth_otp_codes` — Password reset codes
+- `auth_otp_codes` — Password reset codes (10-minute expiry)
 - `profiles` — User display names
 
-Tables are auto-created on startup.
+## Building the cell locally
 
-## Architecture
-
+```bash
+cd pulp-cell
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o bananauth.wasm .
 ```
-Client → Bananauth API → SQLite
-           ↓
-         JWT Token
-           ↓
-    Other services validate
-    via /auth/session
-```
-
-Other services in your stack call `/auth/session` with the bearer token to verify identity. No shared database required.
 
 ## License
 
