@@ -35,6 +35,8 @@ go.work.sum
 *.db-wal
 
 pulp-cell/*.wasm
+pulp-cell/bananauth-cell
+pulp-cell/bananauth-plugin
 pulp-cell/data/
 
 # Pulp deployment build/runtime artifacts
