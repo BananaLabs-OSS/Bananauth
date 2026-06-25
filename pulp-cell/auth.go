@@ -14,15 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/uptrace/bun"
 	"golang.org/x/crypto/bcrypt"
-)
 
-// normalizeEmail canonicalizes an email for storage and lookup so that
-// case/whitespace variants of the same address collide on the unique
-// index instead of creating duplicate accounts. Mirrors native
-// Bananauth/internal/handlers/auth.go.
-func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
-}
+	"bananauth-cell/otpscope"
+)
 
 // Per-IP reset throttle + per-email bad-attempt cap for the
 // password-reset OTP path. The cell runtime is step-driven (single
@@ -64,7 +58,7 @@ func (h *AuthHandler) Register(c *pulpgin.Context) {
 		return
 	}
 
-	req.Email = normalizeEmail(req.Email)
+	req.Email = otpscope.NormalizeEmail(req.Email)
 
 	ctx := c.Ctx()
 
@@ -146,7 +140,7 @@ func (h *AuthHandler) Login(c *pulpgin.Context) {
 		return
 	}
 
-	req.Email = normalizeEmail(req.Email)
+	req.Email = otpscope.NormalizeEmail(req.Email)
 
 	ctx := c.Ctx()
 
@@ -243,7 +237,7 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 		return
 	}
 
-	req.Email = normalizeEmail(req.Email)
+	req.Email = otpscope.NormalizeEmail(req.Email)
 
 	ctx := c.Ctx()
 	successResponse := pulpgin.H{"message": "if an account exists, a reset code has been sent"}
@@ -302,7 +296,7 @@ func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
 	}
 	resetPwRL.Store(ip, time.Now())
 
-	req.Email = normalizeEmail(req.Email)
+	req.Email = otpscope.NormalizeEmail(req.Email)
 
 	// Per-email bad-attempt cap: after too many wrong codes, lock the
 	// target out of further guesses until a new code is requested.
@@ -387,7 +381,7 @@ func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
 			c.JSON(http.StatusNotFound, middleware.ErrorResponse{Error: "not_found", Message: "No account found"})
 			return
 		}
-		if req.Email == "" || !strings.EqualFold(oauthLink.ProviderEmail, normalizeEmail(req.Email)) {
+		if req.Email == "" || !strings.EqualFold(oauthLink.ProviderEmail, otpscope.NormalizeEmail(req.Email)) {
 			c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{Error: "invalid_email", Message: "Email does not match account"})
 			return
 		}
