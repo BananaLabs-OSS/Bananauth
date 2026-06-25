@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -273,12 +272,7 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 		return
 	}
 
-	if h.sendEmail != nil {
-		_ = h.sendEmail(req.Email, code)
-	} else {
-		// Parity with native Bananauth/internal/handlers/auth.go:306.
-		log.Printf("Password reset OTP for %s: %s", req.Email, code)
-	}
+	_ = h.sendEmail(req.Email, code)
 
 	c.JSON(http.StatusOK, successResponse)
 }
