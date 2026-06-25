@@ -6,9 +6,10 @@
 //
 // These mirror the two security-load-bearing pure pieces of auth.go:
 //
-//   - NormalizeEmail == auth.go normalizeEmail (lowercase + trim): the
-//     canonical email form used for storage AND lookup, so case/whitespace
-//     variants collide instead of bypassing the per-email scope.
+//   - NormalizeEmail canonicalizes the email for storage and lookup
+//     (lowercase + trim): the canonical form so case/whitespace variants
+//     collide instead of bypassing the per-email scope. auth.go calls
+//     this directly — NormalizeEmail is the single source of truth.
 //
 //   - OTPMatches encodes the WHERE clause of the AUTH-M2 / AUTH-M3 fix:
 //     `code = UPPER(?) AND type = ? AND email = ? AND expires_at > now`.
@@ -26,7 +27,7 @@ import (
 )
 
 // NormalizeEmail canonicalizes an email for storage and lookup.
-// MUST stay identical to normalizeEmail in ../auth.go.
+// auth.go calls this directly — do not inline a duplicate.
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
