@@ -11,7 +11,12 @@ import (
 )
 
 type ProfileHandler struct {
-	db *bun.DB
+	db       *bun.DB
+	identity sessionDispatcher
+}
+
+func NewComposedProfileHandler(identity sessionDispatcher) *ProfileHandler {
+	return &ProfileHandler{identity: identity}
 }
 
 func NewProfileHandler(db *bun.DB) *ProfileHandler {
@@ -19,6 +24,10 @@ func NewProfileHandler(db *bun.DB) *ProfileHandler {
 }
 
 func (h *ProfileHandler) Create(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.createComposed(c)
+		return
+	}
 	var req CreateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -54,6 +63,10 @@ func (h *ProfileHandler) Create(c *pulpgin.Context) {
 }
 
 func (h *ProfileHandler) Get(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.getComposed(c)
+		return
+	}
 	id := c.Param("id")
 	ctx := c.Ctx()
 
@@ -67,6 +80,10 @@ func (h *ProfileHandler) Get(c *pulpgin.Context) {
 }
 
 func (h *ProfileHandler) Update(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.updateComposed(c)
+		return
+	}
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})

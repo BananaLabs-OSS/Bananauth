@@ -13,12 +13,12 @@ import (
 
 func TestNormalizeEmail(t *testing.T) {
 	cases := map[string]string{
-		"User@Example.COM":     "user@example.com",
-		"  pad@example.com  ":  "pad@example.com",
-		"already@lower.case":   "already@lower.case",
-		"\tTAB@Example.com\n":  "tab@example.com",
-		"":                     "",
-		"   ":                  "",
+		"User@Example.COM":    "user@example.com",
+		"  pad@example.com  ": "pad@example.com",
+		"already@lower.case":  "already@lower.case",
+		"\tTAB@Example.com\n": "tab@example.com",
+		"":                    "",
+		"   ":                 "",
 	}
 	for in, want := range cases {
 		if got := NormalizeEmail(in); got != want {

@@ -1,0 +1,16 @@
+name = "auth-session"
+version = "0.1.0"
+wasm = "auth-session.wasm"
+wasm_sha256 = "3192291ea2f804be564a8c9e0cd3bef310d327405f145154c5021f3bcfac45bc"
+
+provides = [
+  "auth.session.v1.create",
+  "auth.session.v1.get",
+  "auth.session.v1.revoke",
+]
+consumes = []
+depends_on = []
+
+# This package owns durable session lifecycle only. JWT signing and validation
+# remain stateless library behavior in the application compatibility shell.
+capabilities = ["storage.sqlite"]

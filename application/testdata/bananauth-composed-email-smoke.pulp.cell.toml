@@ -1,0 +1,23 @@
+# Test-only counterpart to the composed deployment manifest.
+name = "bananauth-http"
+version = "0.1.0"
+wasm = "../../pulp-cell/bananauth.wasm"
+
+consumes = ["orchestrator.dispatch"]
+depends_on = ["bananauth-lua"]
+
+capabilities = [
+  "transport.http.inbound",
+  "transport.http.outbound",
+  "identity.oauth.provider",
+  "identity.jwt.hs256",
+  "storage.sqlite",
+  "entropy.read",
+]
+
+[config]
+token_expiry_minutes = 1440
+composed_sessions = true
+composed_identity = true
+auth_methods = ["password", "discord"]
+discord_redirect_url = "https://bananauth.example.test/auth/oauth/discord/callback"

@@ -84,6 +84,15 @@ type PasswordChangeRequest struct {
 	NewPassword     string `json:"new_password" binding:"required,min=8"`
 }
 
+// AttachNativeCredentialRequest is accepted only from an authenticated
+// Bananauth session. It converts an OAuth-only account into a dual-mode
+// account without issuing a new account identity.
+type AttachNativeCredentialRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Username string `json:"username" binding:"required,min=3,max=32"`
+	Password string `json:"password" binding:"required,min=8"`
+}
+
 type ForgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
@@ -92,6 +101,21 @@ type ResetPasswordRequest struct {
 	Email       string `json:"email" binding:"required,email"`
 	Code        string `json:"code" binding:"required"`
 	NewPassword string `json:"new_password" binding:"required,min=8"`
+}
+
+// EmailVerificationIssueRequest is the public, passwordless email-code
+// request. It is served only when Bananauth's composed identity owner is
+// active; the HTTP shell generates no durable verification state itself.
+type EmailVerificationIssueRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+// EmailVerificationConsumeRequest proves a code issued by the composed
+// identity owner. It deliberately carries no account/session claim; the
+// consuming application owns its own presentation session.
+type EmailVerificationConsumeRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	Code  string `json:"code" binding:"required"`
 }
 
 type DeleteAccountRequest struct {

@@ -1,11 +1,12 @@
 // Bananauth — Pulp cell port.
 //
 // Identity + authentication service: native (email/password + JWT +
-// session revocation) and OAuth (Discord). All outbound HTTP to
-// OAuth providers goes through pulp.HTTP.Fetch; password hashing uses
+// session revocation) and OAuth (Discord). In composed mode, OAuth provider
+// protocol and credentials belong to Pulp's host capability; password hashing uses
 // golang.org/x/crypto/bcrypt (pure Go — works under wasip1). Email
 // delivery (password reset OTP) goes through Resend's REST API when
-// configured, otherwise the OTP is printed to cell stdout for dev.
+// configured. In composed mode delivery is a durable host-owned notification
+// effect; this direct path exists solely for the legacy compatibility cell.
 //
 // Build:
 //
@@ -22,9 +23,11 @@ import (
 	"time"
 
 	"github.com/BananaLabs-OSS/Fiber/pulp"
+	"github.com/BananaLabs-OSS/Fiber/pulp/cellconfig"
 	_ "github.com/BananaLabs-OSS/Fiber/pulp/entropy/cryptorand" // wires entropy.read into crypto/rand.Reader
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
 	_ "github.com/BananaLabs-OSS/Fiber/pulp/sql"
+	"github.com/BananaLabs-OSS/Fiber/pulp/workflow"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 )
@@ -57,6 +60,9 @@ func bootstrap(configBytes []byte) error {
 	}
 
 	sm := NewSessionManager(cfg.JWTSecret, cfg.TokenExpiry)
+	if cfg.ComposedSessions {
+		sm = NewComposedSessionManager(cfg.JWTSecret, cfg.TokenExpiry, workflow.NewClient("bananauth-lua"))
+	}
 
 	// sendEmail wires the password-reset OTP through Resend's REST
 	// API via pulp.HTTP.Fetch. When the API key is unset (dev mode)
@@ -94,14 +100,28 @@ func bootstrap(configBytes []byte) error {
 
 	authH := NewAuthHandler(db, sm, sendEmail)
 	profileH := NewProfileHandler(db)
+	var identityDispatch sessionDispatcher
+	if cfg.ComposedIdentity {
+		identityDispatch = workflow.NewClient("bananauth-lua")
+		if err := importLegacyIdentity(context.Background(), db, identityDispatch); err != nil {
+			return fmt.Errorf("initialize composed identity: %w", err)
+		}
+		authH = NewComposedAuthHandler(sm, identityDispatch)
+		profileH = NewComposedProfileHandler(identityDispatch)
+	}
 
 	var oauthH *OAuthHandler
-	if cfg.DiscordClientID != "" && cfg.DiscordClientSecret != "" {
-		oauthH = NewOAuthHandler(db, sm, DiscordOAuthConfig{
+	if oauthConfigured(cfg) {
+		discord := DiscordOAuthConfig{
 			ClientID:     cfg.DiscordClientID,
 			ClientSecret: cfg.DiscordClientSecret,
 			RedirectURL:  cfg.DiscordRedirectURL,
-		})
+		}
+		if cfg.ComposedIdentity {
+			oauthH = NewComposedOAuthHandler(sm, cfg.DiscordRedirectURL, identityDispatch)
+		} else {
+			oauthH = NewOAuthHandler(db, sm, discord)
+		}
 	}
 
 	r := pulpgin.New()
@@ -122,6 +142,13 @@ func bootstrap(configBytes []byte) error {
 	auth.POST("/login", authH.Login)
 	auth.POST("/password/forgot", authH.ForgotPassword)
 	auth.POST("/password/reset", authH.ResetPassword)
+	if cfg.ComposedIdentity {
+		// Passwordless verification belongs to auth-identity. Do not expose
+		// these routes from the legacy HTTP owner, which has no matching
+		// durable verification state.
+		auth.POST("/email-verification", authH.IssueEmailVerification)
+		auth.POST("/email-verification/consume", authH.ConsumeEmailVerification)
+	}
 	if oauthH != nil {
 		auth.GET("/oauth/discord", oauthH.DiscordAuthorize)
 		auth.GET("/oauth/discord/callback", oauthH.DiscordCallback)
@@ -136,6 +163,7 @@ func bootstrap(configBytes []byte) error {
 	protected.GET("/session", authH.Session)
 	protected.POST("/logout", authH.Logout)
 	protected.POST("/password", authH.ChangePassword)
+	protected.POST("/password/attach", authH.AttachNativeCredential)
 	protected.DELETE("/account", authH.DeleteAccount)
 
 	protectedProfiles := r.Group("/profiles")
@@ -147,6 +175,16 @@ func bootstrap(configBytes []byte) error {
 		return fmt.Errorf("router: %w", err)
 	}
 	return nil
+}
+
+// oauthConfigured deliberately has separate composed and legacy paths.
+// Composed OAuth gets credentials exclusively from identity.oauth.provider;
+// the compatibility path still uses its legacy per-cell configuration.
+func oauthConfigured(cfg config) bool {
+	if cfg.ComposedIdentity {
+		return cfg.DiscordRedirectURL != ""
+	}
+	return cfg.DiscordClientID != "" && cfg.DiscordClientSecret != "" && cfg.DiscordRedirectURL != ""
 }
 
 func migrate(ctx context.Context) error {
@@ -204,8 +242,10 @@ func migrate(ctx context.Context) error {
 }
 
 type config struct {
-	JWTSecret   string
-	TokenExpiry time.Duration
+	JWTSecret        string
+	TokenExpiry      time.Duration
+	ComposedSessions bool
+	ComposedIdentity bool
 
 	DiscordClientID     string
 	DiscordClientSecret string
@@ -235,7 +275,7 @@ var knownAuthMethods = map[string]bool{
 // app is configured.
 func defaultAuthMethods(cfg config) []string {
 	methods := []string{"password"}
-	if cfg.DiscordClientID != "" && cfg.DiscordClientSecret != "" {
+	if oauthConfigured(cfg) {
 		methods = append(methods, "discord")
 	}
 	return methods
@@ -252,7 +292,7 @@ func resolveAuthMethods(requested []string, cfg config) []string {
 		if !knownAuthMethods[m] {
 			continue
 		}
-		if m == "discord" && (cfg.DiscordClientID == "" || cfg.DiscordClientSecret == "") {
+		if m == "discord" && !oauthConfigured(cfg) {
 			continue // advertised but not configured — drop it
 		}
 		out = append(out, m)
@@ -268,13 +308,11 @@ func parseConfig(data []byte) (config, error) {
 	if len(data) == 0 {
 		return cfg, fmt.Errorf("missing [config]")
 	}
-	var raw map[string]any
-	if err := decodeMsgpack(data, &raw); err != nil {
-		return cfg, err
-	}
 	var tmp struct {
 		JWTSecret           string   `json:"jwt_secret"`
 		TokenExpiryMinutes  int64    `json:"token_expiry_minutes"`
+		ComposedSessions    bool     `json:"composed_sessions"`
+		ComposedIdentity    bool     `json:"composed_identity"`
 		DiscordClientID     string   `json:"discord_client_id"`
 		DiscordClientSecret string   `json:"discord_client_secret"`
 		DiscordRedirectURL  string   `json:"discord_redirect_url"`
@@ -282,11 +320,10 @@ func parseConfig(data []byte) (config, error) {
 		ResendFrom          string   `json:"resend_from"`
 		AuthMethods         []string `json:"auth_methods"`
 	}
-	jbytes, _ := json.Marshal(raw)
-	if err := json.Unmarshal(jbytes, &tmp); err != nil {
+	if err := cellconfig.Decode(data, &tmp); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
 	}
-	if tmp.JWTSecret == "" || tmp.JWTSecret == "dev-jwt-secret-change-me" {
+	if !tmp.ComposedSessions && (tmp.JWTSecret == "" || tmp.JWTSecret == "dev-jwt-secret-change-me") {
 		return cfg, fmt.Errorf("jwt_secret missing or still set to the default placeholder — set a real secret before deploying")
 	}
 	expiry := time.Duration(tmp.TokenExpiryMinutes) * time.Minute
@@ -296,11 +333,16 @@ func parseConfig(data []byte) (config, error) {
 	cfg = config{
 		JWTSecret:           tmp.JWTSecret,
 		TokenExpiry:         expiry,
+		ComposedSessions:    tmp.ComposedSessions,
+		ComposedIdentity:    tmp.ComposedIdentity,
 		DiscordClientID:     tmp.DiscordClientID,
 		DiscordClientSecret: tmp.DiscordClientSecret,
 		DiscordRedirectURL:  tmp.DiscordRedirectURL,
 		ResendAPIKey:        tmp.ResendAPIKey,
 		ResendFrom:          tmp.ResendFrom,
+	}
+	if cfg.ComposedSessions && cfg.JWTSecret != "" {
+		return cfg, fmt.Errorf("composed_sessions uses host identity.jwt.hs256; jwt_secret must not be configured in the cell")
 	}
 	// Resolve after the rest of cfg is built — discord eligibility depends
 	// on the OAuth fields above.

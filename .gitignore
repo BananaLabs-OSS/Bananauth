@@ -35,6 +35,8 @@ go.work.sum
 *.db-wal
 
 pulp-cell/*.wasm
+session-owner/*.wasm
+identity-owner/*.wasm
 pulp-cell/bananauth-cell
 pulp-cell/bananauth-plugin
 pulp-cell/data/

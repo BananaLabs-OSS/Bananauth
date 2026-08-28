@@ -14,7 +14,7 @@ import (
 	"github.com/uptrace/bun"
 	"golang.org/x/crypto/bcrypt"
 
-	"bananauth-cell/otpscope"
+	"github.com/bananalabs-oss/bananauth/pkg/otpscope"
 )
 
 // Per-IP reset throttle + per-email bad-attempt cap for the
@@ -34,13 +34,22 @@ type AuthHandler struct {
 	db        *bun.DB
 	sessions  *SessionManager
 	sendEmail func(to, code string) error
+	identity  sessionDispatcher
 }
 
 func NewAuthHandler(db *bun.DB, sm *SessionManager, sendEmail func(string, string) error) *AuthHandler {
 	return &AuthHandler{db: db, sessions: sm, sendEmail: sendEmail}
 }
 
+func NewComposedAuthHandler(sm *SessionManager, identity sessionDispatcher) *AuthHandler {
+	return &AuthHandler{sessions: sm, identity: identity}
+}
+
 func (h *AuthHandler) Register(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.registerComposed(c)
+		return
+	}
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{
@@ -128,7 +137,27 @@ func (h *AuthHandler) Register(c *pulpgin.Context) {
 	})
 }
 
+func (h *AuthHandler) IssueEmailVerification(c *pulpgin.Context) {
+	if h.identity == nil {
+		c.JSON(http.StatusNotImplemented, middleware.ErrorResponse{Error: "composed_identity_required"})
+		return
+	}
+	h.issueEmailVerificationComposed(c)
+}
+
+func (h *AuthHandler) ConsumeEmailVerification(c *pulpgin.Context) {
+	if h.identity == nil {
+		c.JSON(http.StatusNotImplemented, middleware.ErrorResponse{Error: "composed_identity_required"})
+		return
+	}
+	h.consumeEmailVerificationComposed(c)
+}
+
 func (h *AuthHandler) Login(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.loginComposed(c)
+		return
+	}
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -185,6 +214,10 @@ func (h *AuthHandler) Session(c *pulpgin.Context) {
 }
 
 func (h *AuthHandler) ChangePassword(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.changePasswordComposed(c)
+		return
+	}
 	var req PasswordChangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -225,7 +258,22 @@ func (h *AuthHandler) ChangePassword(c *pulpgin.Context) {
 	c.JSON(http.StatusOK, pulpgin.H{"message": "password changed"})
 }
 
+func (h *AuthHandler) AttachNativeCredential(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.attachNativeCredentialComposed(c)
+		return
+	}
+	// The standalone legacy HTTP cell has no composed identity owner, so it
+	// cannot prove account-identity preservation. Keep this conversion route
+	// unavailable there rather than risk creating a second account.
+	c.JSON(http.StatusNotImplemented, middleware.ErrorResponse{Error: "composed_identity_required"})
+}
+
 func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.forgotPasswordComposed(c)
+		return
+	}
 	var req ForgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -272,6 +320,10 @@ func (h *AuthHandler) ForgotPassword(c *pulpgin.Context) {
 }
 
 func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.resetPasswordComposed(c)
+		return
+	}
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -343,6 +395,10 @@ func (h *AuthHandler) ResetPassword(c *pulpgin.Context) {
 }
 
 func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.deleteAccountComposed(c)
+		return
+	}
 	var req DeleteAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request", Message: err.Error()})
@@ -402,4 +458,3 @@ func (h *AuthHandler) DeleteAccount(c *pulpgin.Context) {
 
 	c.JSON(http.StatusOK, pulpgin.H{"message": "account deleted"})
 }
-

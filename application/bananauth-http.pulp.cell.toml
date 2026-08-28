@@ -1,0 +1,28 @@
+name = "bananauth"
+version = "0.1.0"
+wasm = "../pulp-cell/bananauth.wasm"
+wasm_sha256 = "55c78419bf7ada5a89a94bea34e0bd2e52f6f36e5aac3f38a44f269ed2f597aa"
+
+consumes = ["orchestrator.dispatch"]
+depends_on = ["bananauth-lua"]
+
+# The compatibility shell owns HTTP projection and privileged effects while
+# stateful session lifecycle is sequenced through Lua into auth-session.
+capabilities = [
+  "transport.http.inbound",
+  "transport.http.outbound",
+  "identity.oauth.provider",
+  "identity.jwt.hs256",
+  "storage.sqlite",
+  "entropy.read",
+]
+
+[config]
+token_expiry_minutes = 1440
+composed_sessions = true
+composed_identity = true
+auth_methods = ["password", "discord"]
+# In composed mode, Discord client ID and secret are host-owned through
+# identity.oauth.provider. This public redirect binding must match the host
+# provider configuration; it is not a credential.
+discord_redirect_url = ""

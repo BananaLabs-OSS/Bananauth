@@ -1,0 +1,15 @@
+schema_version = 1
+name = "bananauth"
+version = "0.2.0"
+require_wasm_sha256 = true
+cells = [
+  "../identity-owner/pulp.cell.toml",
+  "../session-owner/pulp.cell.toml",
+  "lua-orchestrator.pulp.cell.toml",
+  "bananauth-http.pulp.cell.toml",
+]
+
+[orchestrator]
+manifest = "lua-orchestrator.pulp.cell.toml"
+script = "bananauth.lua"
+sha256 = "ac1507fc3de66206dcd06d7fb2d301751ac428e350de7df871c762ec96cdfd05"

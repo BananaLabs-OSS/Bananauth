@@ -12,13 +12,10 @@ set -e
 
 : "${JWT_SECRET:?set JWT_SECRET (shared HS256 secret with bananadoro)}"
 export HTTP_PORT="${HTTP_PORT:-3000}"
+export PULP_JWT_HS256_SECRET="$JWT_SECRET"
+APP_MANIFEST=/app/Bananauth/application/pulp.app.toml
+export PULP_OAUTH_DISCORD_CLIENT_ID="${PULP_OAUTH_DISCORD_CLIENT_ID:-${DISCORD_CLIENT_ID:-}}"
+export PULP_OAUTH_DISCORD_CLIENT_SECRET="${PULP_OAUTH_DISCORD_CLIENT_SECRET:-${DISCORD_CLIENT_SECRET:-}}"
+export PULP_OAUTH_DISCORD_REDIRECT_URL="${PULP_OAUTH_DISCORD_REDIRECT_URL:-${DISCORD_REDIRECT_URL:-}}"
 
-MANIFEST=/app/cell/pulp.cell.toml
-sed -i "s#^jwt_secret = .*#jwt_secret = \"${JWT_SECRET}\"#" "$MANIFEST"
-
-# Optional extra secrets (only if provided):
-# [ -n "$DISCORD_CLIENT_ID" ]     && sed -i "s#^discord_client_id = .*#discord_client_id = \"${DISCORD_CLIENT_ID}\"#" "$MANIFEST"
-# [ -n "$DISCORD_CLIENT_SECRET" ] && sed -i "s#^discord_client_secret = .*#discord_client_secret = \"${DISCORD_CLIENT_SECRET}\"#" "$MANIFEST"
-# [ -n "$RESEND_API_KEY" ]        && sed -i "s#^resend_api_key = .*#resend_api_key = \"${RESEND_API_KEY}\"#" "$MANIFEST"
-
-exec /app/bananauth-host -manifest "$MANIFEST"
+exec /app/bananauth-host -app "$APP_MANIFEST"

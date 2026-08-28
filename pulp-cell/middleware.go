@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	pulpgin "github.com/BananaLabs-OSS/Fiber/pulp/gin"
-	"github.com/BananaLabs-OSS/Fiber/pulp/gin/middleware"
 )
 
 // sessionAuth validates the JWT and then checks that the session has
@@ -23,19 +22,19 @@ func sessionAuth(sm *SessionManager) pulpgin.HandlerFunc {
 			return
 		}
 
-		claims, err := middleware.ParseToken(parts[1], sm.Secret())
+		accountID, sessionID, err := sm.Verify(parts[1])
 		if err != nil {
 			c.AbortWithStatusJSON(401, pulpgin.H{"error": "invalid or expired token"})
 			return
 		}
 
-		if !sm.Exists(claims.SessionID) {
+		if !sm.Exists(sessionID) {
 			c.AbortWithStatusJSON(401, pulpgin.H{"error": "session revoked"})
 			return
 		}
 
-		c.Set("account_id", claims.AccountID)
-		c.Set("session_id", claims.SessionID)
+		c.Set("account_id", accountID)
+		c.Set("session_id", sessionID)
 		c.Next()
 	}
 }

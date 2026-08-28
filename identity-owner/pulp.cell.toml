@@ -1,0 +1,38 @@
+name = "auth-identity"
+version = "0.1.0"
+wasm = "auth-identity.wasm"
+wasm_sha256 = "33a871f4800c7a688ef19dfbde2b6b9972f0fddf43a99f0bfe4a7645cf00b11e"
+
+provides = [
+  "auth.identity.v1.native.register",
+  "auth.identity.v1.native.authenticate",
+  "auth.identity.v1.native.password.change",
+  "auth.identity.v1.native.attach",
+  "auth.identity.v1.password-reset.issue",
+  "auth.identity.v1.password-reset.consume",
+  "auth.identity.v1.email-verification.issue",
+  "auth.identity.v1.email-verification.consume",
+  "auth.identity.v1.account.delete",
+  "auth.identity.v1.account.erase",
+  "auth.identity.v1.retention-lease.create",
+  "auth.identity.v1.retention-lease.renew",
+  "auth.identity.v1.retention-lease.release",
+  "auth.identity.v1.retention-lease.list",
+  "auth.identity.v1.retention-eligibility.get",
+  "auth.identity.v1.oauth-state.issue",
+  "auth.identity.v1.oauth-state.consume",
+  "auth.identity.v1.oauth.resolve",
+  "auth.identity.v1.oauth.upsert",
+  "auth.identity.v1.profile.create",
+  "auth.identity.v1.profile.get",
+  "auth.identity.v1.profile.update",
+  "auth.identity.v1.rate.check",
+  "auth.identity.v1.rate.clear",
+  "auth.identity.v1.legacy.import",
+  "auth.identity.effects.v1.claim",
+  "auth.identity.effects.v1.acknowledge",
+  "auth.identity.effects.v1.retry",
+]
+consumes = []
+depends_on = []
+capabilities = ["storage.sqlite", "workers"]

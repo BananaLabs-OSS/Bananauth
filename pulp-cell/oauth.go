@@ -39,17 +39,26 @@ type OAuthHandler struct {
 	db       *bun.DB
 	sessions *SessionManager
 	discord  DiscordOAuthConfig
+	// redirectBinding is the public callback identity shared with the
+	// host-owned provider capability. It is not a credential.
+	redirectBinding string
+	identity        sessionDispatcher
 
 	mu     sync.Mutex
 	states map[string]time.Time
 }
 
+func NewComposedOAuthHandler(sm *SessionManager, redirectBinding string, identity sessionDispatcher) *OAuthHandler {
+	return &OAuthHandler{sessions: sm, redirectBinding: redirectBinding, identity: identity}
+}
+
 func NewOAuthHandler(db *bun.DB, sm *SessionManager, discord DiscordOAuthConfig) *OAuthHandler {
 	return &OAuthHandler{
-		db:       db,
-		sessions: sm,
-		discord:  discord,
-		states:   map[string]time.Time{},
+		db:              db,
+		sessions:        sm,
+		discord:         discord,
+		redirectBinding: discord.RedirectURL,
+		states:          map[string]time.Time{},
 	}
 }
 
@@ -68,6 +77,10 @@ func (h *OAuthHandler) pruneStates() {
 }
 
 func (h *OAuthHandler) DiscordAuthorize(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.discordAuthorizeComposed(c)
+		return
+	}
 	h.pruneStates()
 
 	state, err := authcrypto.GenerateState()
@@ -90,6 +103,10 @@ func (h *OAuthHandler) DiscordAuthorize(c *pulpgin.Context) {
 }
 
 func (h *OAuthHandler) DiscordCallback(c *pulpgin.Context) {
+	if h.identity != nil {
+		h.discordCallbackComposed(c)
+		return
+	}
 	h.pruneStates()
 
 	code := c.Query("code")
@@ -260,4 +277,3 @@ func fetchDiscordUser(accessToken string) (*discordUserInfo, error) {
 	}
 	return &u, nil
 }
-
