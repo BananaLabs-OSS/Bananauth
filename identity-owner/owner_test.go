@@ -324,6 +324,23 @@ func TestSessionsEmailVerificationAcceptsEarlierCodeWhileReplacementIsInFlight(t
 	}
 }
 
+func TestSessionsEmailVerificationReplaysSuccessAfterLostResponse(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	issued := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, EmailVerificationIssueRequest{
+		RequestID: "issue", VerificationID: "verification", EffectID: "effect", Email: "player@example.test", Code: "123456", Now: 100, ExpiresAt: 1900,
+	})
+	if !issued.OK {
+		t.Fatalf("issue = %#v", issued)
+	}
+	request := EmailVerificationConsumeRequest{RequestID: "stable-consume", AccountID: "stable-account", Email: "player@example.test", Code: "123456", Now: 200}
+	first := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, request)
+	request.Now = 201
+	replayed := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, request)
+	if !first.OK || !first.Value.Verified || !replayed.OK || !replayed.Value.Verified || replayed.Value.AccountID != first.Value.AccountID {
+		t.Fatalf("lost-success replay: first=%#v replay=%#v", first, replayed)
+	}
+}
+
 func TestSQLiteSnapshotSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.db")
 	store, err := openSQLite(path)

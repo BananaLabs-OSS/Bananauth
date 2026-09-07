@@ -431,7 +431,12 @@ func (o *owner) emailVerificationConsume(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnEmailVerificationConsume, req.RequestID, req, func(s *snapshot) (any, error) {
+	// Now is validation input, not command identity. Excluding it from the
+	// receipt digest lets an identical email/code retry replay a committed
+	// success after the original HTTP response was lost.
+	idempotencyRequest := req
+	idempotencyRequest.Now = 0
+	return o.command(FnEmailVerificationConsume, req.RequestID, idempotencyRequest, func(s *snapshot) (any, error) {
 		for _, value := range s.OTPs {
 			if value.Email == req.Email && value.Type == "sessions_email_verification" && value.Code == strings.ToUpper(req.Code) && value.ExpiresAt > req.Now {
 				accountID := accountIDForEmail(s, req.Email)
