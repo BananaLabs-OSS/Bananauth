@@ -941,6 +941,25 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid identity effect claim")
 	}
 	now := time.Now().UTC().UnixMilli()
+	// Idle polling is observational, not a domain command. Persisting every
+	// empty poll serialized login behind needless PostgreSQL writes and could
+	// let a valid consume commit only after the HTTP deadline.
+	o.mu.Lock()
+	hasClaimable := false
+	for _, record := range o.state.Effects {
+		if record.Status == string(effect.Pending) && record.AvailableAt <= now &&
+			(record.Lease == nil || record.Lease.LeasedUntilUnixMilli <= now) {
+			hasClaimable = true
+			break
+		}
+	}
+	o.mu.Unlock()
+	if !hasClaimable {
+		return msgpack.Marshal(effect.ClaimResult{
+			Version: effect.OutboxVersionV1, Owner: effectOwner,
+			ConsumerID: req.ConsumerID, Leases: []effect.Lease{},
+		})
+	}
 	requestID := fmt.Sprintf("%s:%d", req.ConsumerID, time.Now().UTC().UnixNano())
 	return o.commandRaw(FnEffectsClaim, requestID, req, func(s *snapshot) (any, error) {
 		ids := make([]string, 0, len(s.Effects))

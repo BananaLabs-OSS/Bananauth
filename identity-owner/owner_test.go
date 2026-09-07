@@ -249,6 +249,19 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if err := msgpack.Unmarshal(response, &settled); err != nil || !settled.Settled {
 		t.Fatalf("settled = %#v, %v", settled, err)
 	}
+	recordsBeforeIdleClaim := len(store.records)
+	raw, _ = msgpack.Marshal(claimRequest)
+	response, err = cell.effectsClaim(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idle effect.ClaimResult
+	if err := msgpack.Unmarshal(response, &idle); err != nil || len(idle.Leases) != 0 {
+		t.Fatalf("idle claim = %#v, %v", idle, err)
+	}
+	if len(store.records) != recordsBeforeIdleClaim {
+		t.Fatalf("idle claim persisted a command: before=%d after=%d", recordsBeforeIdleClaim, len(store.records))
+	}
 	reopened := newTestOwner(t, store)
 	if reopened.state.Effects["email"].Receipt == nil || reopened.state.Effects["email"].Status != string(effect.Completed) {
 		t.Fatalf("receipt did not survive reopen: %#v", reopened.state.Effects["email"])
