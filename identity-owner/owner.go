@@ -409,11 +409,9 @@ func (o *owner) emailVerificationIssue(raw []byte) ([]byte, error) {
 		if blank(req.VerificationID) || blank(req.EffectID) || blank(req.Email) || blank(req.Code) || req.Now <= 0 || req.ExpiresAt <= req.Now {
 			return nil, domain("invalid_request", "email verification issue is incomplete")
 		}
-		for id, value := range s.OTPs {
-			if value.Email == req.Email && value.Type == "sessions_email_verification" {
-				delete(s.OTPs, id)
-			}
-		}
+		// Keep earlier unexpired codes valid until one is consumed. Delivery is
+		// asynchronous, so deleting the prior OTP here can make a delayed newer
+		// email invalidate the only code the customer has actually received.
 		s.OTPs[req.VerificationID] = otpRecord{ID: req.VerificationID, Email: req.Email, Code: strings.ToUpper(req.Code), Type: "sessions_email_verification", ExpiresAt: req.ExpiresAt}
 		intent, err := effect.NewIntent(req.EffectID, effect.KindNotificationEmailSend, req.EffectID, notificationEmailPayload{
 			To: req.Email, Subject: "Your Sessions verification code",
@@ -434,7 +432,7 @@ func (o *owner) emailVerificationConsume(raw []byte) ([]byte, error) {
 	}
 	req.Email = otpscope.NormalizeEmail(req.Email)
 	return o.command(FnEmailVerificationConsume, req.RequestID, req, func(s *snapshot) (any, error) {
-		for id, value := range s.OTPs {
+		for _, value := range s.OTPs {
 			if value.Email == req.Email && value.Type == "sessions_email_verification" && value.Code == strings.ToUpper(req.Code) && value.ExpiresAt > req.Now {
 				accountID := accountIDForEmail(s, req.Email)
 				if accountID == "" {
@@ -444,7 +442,14 @@ func (o *owner) emailVerificationConsume(raw []byte) ([]byte, error) {
 					accountID = req.AccountID
 					s.Accounts[accountID] = AccountProjection{AccountID: accountID, Email: req.Email, CreatedAt: req.Now}
 				}
-				delete(s.OTPs, id)
+				// A successful login consumes every outstanding code for this
+				// address. This preserves single-use semantics even when multiple
+				// replacement emails were in flight or arrived out of order.
+				for candidateID, candidate := range s.OTPs {
+					if candidate.Email == req.Email && candidate.Type == "sessions_email_verification" {
+						delete(s.OTPs, candidateID)
+					}
+				}
 				return EmailVerificationConsumeResult{Verified: true, AccountID: accountID}, nil
 			}
 		}

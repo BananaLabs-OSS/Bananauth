@@ -301,6 +301,29 @@ func TestSessionsEmailVerificationCreatesAndReusesTemporaryIdentity(t *testing.T
 	}
 }
 
+func TestSessionsEmailVerificationAcceptsEarlierCodeWhileReplacementIsInFlight(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	for _, issue := range []EmailVerificationIssueRequest{
+		{RequestID: "issue-earlier", VerificationID: "verification-earlier", EffectID: "effect-earlier", Email: "player@example.test", Code: "111111", Now: 100, ExpiresAt: 1900},
+		{RequestID: "issue-newer", VerificationID: "verification-newer", EffectID: "effect-newer", Email: "player@example.test", Code: "222222", Now: 101, ExpiresAt: 1901},
+	} {
+		if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue); !got.OK || !got.Value.Accepted {
+			t.Fatalf("issue = %#v", got)
+		}
+	}
+	verified := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+		RequestID: "consume-earlier", AccountID: "temporary-account", Email: "player@example.test", Code: "111111", Now: 200,
+	})
+	if !verified.OK || !verified.Value.Verified {
+		t.Fatalf("earlier delivered code = %#v", verified)
+	}
+	if replay := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+		RequestID: "consume-newer-after-success", Email: "player@example.test", Code: "222222", Now: 201,
+	}); replay.OK || replay.Error == nil || replay.Error.Code != "invalid_code" {
+		t.Fatalf("outstanding replacement survived successful login: %#v", replay)
+	}
+}
+
 func TestSQLiteSnapshotSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "identity.db")
 	store, err := openSQLite(path)
