@@ -1,7 +1,7 @@
 name = "auth-identity"
 version = "0.1.0"
 wasm = "auth-identity.wasm"
-wasm_sha256 = "33a871f4800c7a688ef19dfbde2b6b9972f0fddf43a99f0bfe4a7645cf00b11e"
+wasm_sha256 = "03a69626ecab42c1e4344849d6176709d94a4dbef02d0981f7a5437205fe76bc"
 
 provides = [
   "auth.identity.v1.native.register",
@@ -36,3 +36,11 @@ provides = [
 consumes = []
 depends_on = []
 capabilities = ["storage.sqlite", "workers"]
+
+[config]
+otp_key_current = ""
+otp_key_previous = ""
+
+[config_env]
+otp_key_current = "BANANAAUTH_OTP_KEY_CURRENT"
+otp_key_previous = "BANANAAUTH_OTP_KEY_PREVIOUS"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	workersext "github.com/BananaLabs-OSS/Pulp-ext-workers"
 	"github.com/BananaLabs-OSS/Pulp/ext"
 	"github.com/BananaLabs-OSS/Pulp/run"
+	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -44,6 +46,9 @@ type identityEffectObserver struct {
 
 func init() {
 	factory, err := workersext.NewResendScopedNotificationEffectExecutorFactory(func(ext.Scope) (workersext.ResendNotificationEmailConfig, error) {
+		if !outboundDeliveryEnabled(os.Getenv) {
+			return workersext.ResendNotificationEmailConfig{}, errors.New("outbound delivery is disabled")
+		}
 		apiKey := os.Getenv("RESEND_API_KEY")
 		if apiKey == "" {
 			return workersext.ResendNotificationEmailConfig{}, errors.New("RESEND_API_KEY is not configured")
@@ -75,7 +80,7 @@ func (o *identityEffectObserver) AfterApplicationStartWithProvider(
 	identity run.ApplicationIdentity,
 	access run.ApplicationProviderAccess,
 ) error {
-	if identity.ApplicationID != identityApplicationID || os.Getenv("RESEND_API_KEY") == "" {
+	if identity.ApplicationID != identityApplicationID || !outboundDeliveryEnabled(os.Getenv) || os.Getenv("RESEND_API_KEY") == "" {
 		return nil
 	}
 	scope, err := ext.NewScope(identity.ApplicationID, identity.InstanceID, identityCellID, "default")
@@ -85,6 +90,10 @@ func (o *identityEffectObserver) AfterApplicationStartWithProvider(
 	executor, err := o.factory.ForScope(scope)
 	if err != nil {
 		return fmt.Errorf("configure identity email executor: %w", err)
+	}
+	keys, err := otpsecure.Parse(os.Getenv("BANANAAUTH_OTP_KEY_CURRENT"), os.Getenv("BANANAAUTH_OTP_KEY_PREVIOUS"))
+	if err != nil {
+		return fmt.Errorf("configure identity OTP delivery security: %w", err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	active := identityEffectRun{cancel: cancel, done: make(chan struct{}), scope: scope}
@@ -100,9 +109,13 @@ func (o *identityEffectObserver) AfterApplicationStartWithProvider(
 
 	go func() {
 		defer close(active.done)
-		runIdentityEffectLoop(ctx, scope, access, executor)
+		runIdentityEffectLoop(ctx, scope, access, executor, keys)
 	}()
 	return nil
+}
+
+func outboundDeliveryEnabled(getenv func(string) string) bool {
+	return strings.EqualFold(strings.TrimSpace(getenv("OUTBOUND_DELIVERY_ENABLED")), "true")
 }
 
 func (o *identityEffectObserver) BeforeApplicationShutdown(_ context.Context, identity run.ApplicationIdentity) error {
@@ -124,7 +137,7 @@ func (o *identityEffectObserver) BeforeApplicationShutdown(_ context.Context, id
 	return o.factory.TeardownScope(active.scope)
 }
 
-func runIdentityEffectLoop(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor) {
+func runIdentityEffectLoop(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor, keys otpsecure.Keyring) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -133,14 +146,14 @@ func runIdentityEffectLoop(ctx context.Context, scope ext.Scope, access run.Appl
 			return
 		case <-timer.C:
 		}
-		if err := drainIdentityEffects(ctx, scope, access, executor); err != nil && ctx.Err() == nil {
+		if err := drainIdentityEffects(ctx, scope, access, executor, keys); err != nil && ctx.Err() == nil {
 			log.Printf("bananauth identity effect drain failed: %v", err)
 		}
 		timer.Reset(time.Second)
 	}
 }
 
-func drainIdentityEffects(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor) error {
+func drainIdentityEffects(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor, keys otpsecure.Keyring) error {
 	claim, err := effect.NewClaimRequest(identityEffectOwner, identityEffectConsumer(scope), 10, int64((30 * time.Second).Milliseconds()))
 	if err != nil {
 		return err
@@ -161,15 +174,31 @@ func drainIdentityEffects(ctx context.Context, scope ext.Scope, access run.Appli
 		return errors.New("identity effect owner returned an invalid claim")
 	}
 	for _, lease := range result.Leases {
-		if err := executeIdentityEffect(ctx, scope, access, executor, lease); err != nil {
+		if err := executeIdentityEffect(ctx, scope, access, executor, keys, lease); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func executeIdentityEffect(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor, lease effect.Lease) error {
-	receipt, submitErr := executor.Submit(ctx, scope, lease.Intent)
+func executeIdentityEffect(ctx context.Context, scope ext.Scope, access run.ApplicationProviderAccess, executor notificationExecutor, keys otpsecure.Keyring, lease effect.Lease) error {
+	deliveryIntent := lease.Intent
+	var encrypted []byte
+	encryptedErr := msgpack.Unmarshal(lease.Intent.Payload, &encrypted)
+	if plaintext, envelope, err := keys.Open(lease.Intent.ID, encrypted); encryptedErr == nil && err == nil {
+		if envelope.ExpiresAt <= time.Now().UnixMilli() {
+			return errors.New("identity OTP delivery envelope expired")
+		}
+		deliveryIntent.Payload = plaintext
+	} else {
+		// Pre-encryption effects remain deliverable only when the owner has retained
+		// a matching live OTP; effectsClaim enforces that expiry boundary.
+		var legacy map[string]any
+		if decodeErr := msgpack.Unmarshal(lease.Intent.Payload, &legacy); decodeErr != nil || legacy["to"] == nil {
+			return fmt.Errorf("decrypt identity OTP delivery: %w", err)
+		}
+	}
+	receipt, submitErr := executor.Submit(ctx, scope, deliveryIntent)
 	if submitErr != nil && receipt.Status == "" {
 		return fmt.Errorf("submit identity effect: %w", submitErr)
 	}
@@ -182,7 +211,7 @@ func executeIdentityEffect(ctx context.Context, scope ext.Scope, access run.Appl
 			return ctx.Err()
 		case <-timer.C:
 		}
-		current, err := executor.Receipt(ctx, scope, lease.Intent.IdempotencyKey)
+		current, err := executor.Receipt(ctx, scope, deliveryIntent.IdempotencyKey)
 		if err != nil {
 			return fmt.Errorf("read identity effect receipt: %w", err)
 		}
@@ -190,6 +219,7 @@ func executeIdentityEffect(ctx context.Context, scope ext.Scope, access run.Appl
 	}
 	switch receipt.Status {
 	case effect.Completed:
+		receipt.Receipt = effect.Receipt{Version: effect.VersionV1, IntentID: lease.Intent.ID, Kind: lease.Intent.Kind, IdempotencyKey: lease.Intent.IdempotencyKey, Status: effect.Completed, Result: receipt.Result}
 		return settleIdentityEffect(ctx, access, identityEffectAck, effect.AcknowledgeRequest{
 			Version: effect.OutboxVersionV1, Owner: lease.Owner, ConsumerID: lease.ConsumerID,
 			LeaseID: lease.LeaseID, Receipt: receipt.Receipt,

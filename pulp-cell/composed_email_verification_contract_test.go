@@ -43,6 +43,7 @@ func TestComposedEmailVerificationRoutesAreOwnerBackedAndLegacyGated(t *testing.
 		"identityEmailVerificationConsumeEvent",
 		`"verification_id": uuid.NewString()`,
 		`"effect_id": uuid.NewString()`,
+		`"caller_key":      c.ClientIP()`,
 		"authcrypto.GenerateOTP()",
 	} {
 		if !strings.Contains(string(handler), required) {

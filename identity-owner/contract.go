@@ -130,6 +130,7 @@ type EmailVerificationIssueRequest struct {
 	VerificationID string `msgpack:"verification_id"`
 	EffectID       string `msgpack:"effect_id"`
 	Email          string `msgpack:"email"`
+	CallerKey      string `msgpack:"caller_key,omitempty"`
 	Code           string `msgpack:"code"`
 	Now            int64  `msgpack:"now"`
 	ExpiresAt      int64  `msgpack:"expires_at"`
@@ -427,6 +428,7 @@ type ownerEffect struct {
 	Status         string          `msgpack:"status"`
 	Attempts       uint32          `msgpack:"attempts"`
 	AvailableAt    int64           `msgpack:"available_at"`
+	ExpiresAt      int64           `msgpack:"expires_at,omitempty"`
 	Lease          *effect.Lease   `msgpack:"lease,omitempty"`
 	Receipt        *effect.Receipt `msgpack:"receipt,omitempty"`
 	LastLeaseID    string          `msgpack:"last_lease_id,omitempty"`

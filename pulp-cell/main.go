@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/BananaLabs-OSS/Fiber/pulp"
@@ -69,6 +70,9 @@ func bootstrap(configBytes []byte) error {
 	// the OTP is printed to cell stdout instead so local testing
 	// can still exercise the reset flow.
 	sendEmail := func(to, code string) error {
+		if !outboundDeliveryEnabled(cfg.OutboundDeliveryEnabled) {
+			return fmt.Errorf("outbound delivery is disabled")
+		}
 		if cfg.ResendAPIKey == "" {
 			// Parity with native Bananauth/internal/handlers/auth.go:306.
 			log.Printf("Password reset OTP for %s: %s", to, code)
@@ -177,6 +181,10 @@ func bootstrap(configBytes []byte) error {
 	return nil
 }
 
+func outboundDeliveryEnabled(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
 // oauthConfigured deliberately has separate composed and legacy paths.
 // Composed OAuth gets credentials exclusively from identity.oauth.provider;
 // the compatibility path still uses its legacy per-cell configuration.
@@ -251,8 +259,9 @@ type config struct {
 	DiscordClientSecret string
 	DiscordRedirectURL  string
 
-	ResendAPIKey string
-	ResendFrom   string
+	ResendAPIKey            string
+	ResendFrom              string
+	OutboundDeliveryEnabled string
 
 	// AuthMethods is the ordered list of login methods this deployment
 	// exposes — the config seam. The public GET /auth/config advertises it
@@ -309,16 +318,17 @@ func parseConfig(data []byte) (config, error) {
 		return cfg, fmt.Errorf("missing [config]")
 	}
 	var tmp struct {
-		JWTSecret           string   `json:"jwt_secret"`
-		TokenExpiryMinutes  int64    `json:"token_expiry_minutes"`
-		ComposedSessions    bool     `json:"composed_sessions"`
-		ComposedIdentity    bool     `json:"composed_identity"`
-		DiscordClientID     string   `json:"discord_client_id"`
-		DiscordClientSecret string   `json:"discord_client_secret"`
-		DiscordRedirectURL  string   `json:"discord_redirect_url"`
-		ResendAPIKey        string   `json:"resend_api_key"`
-		ResendFrom          string   `json:"resend_from"`
-		AuthMethods         []string `json:"auth_methods"`
+		JWTSecret               string   `json:"jwt_secret"`
+		TokenExpiryMinutes      int64    `json:"token_expiry_minutes"`
+		ComposedSessions        bool     `json:"composed_sessions"`
+		ComposedIdentity        bool     `json:"composed_identity"`
+		DiscordClientID         string   `json:"discord_client_id"`
+		DiscordClientSecret     string   `json:"discord_client_secret"`
+		DiscordRedirectURL      string   `json:"discord_redirect_url"`
+		ResendAPIKey            string   `json:"resend_api_key"`
+		ResendFrom              string   `json:"resend_from"`
+		OutboundDeliveryEnabled string   `json:"outbound_delivery_enabled"`
+		AuthMethods             []string `json:"auth_methods"`
 	}
 	if err := cellconfig.Decode(data, &tmp); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -331,15 +341,16 @@ func parseConfig(data []byte) (config, error) {
 		expiry = 24 * time.Hour
 	}
 	cfg = config{
-		JWTSecret:           tmp.JWTSecret,
-		TokenExpiry:         expiry,
-		ComposedSessions:    tmp.ComposedSessions,
-		ComposedIdentity:    tmp.ComposedIdentity,
-		DiscordClientID:     tmp.DiscordClientID,
-		DiscordClientSecret: tmp.DiscordClientSecret,
-		DiscordRedirectURL:  tmp.DiscordRedirectURL,
-		ResendAPIKey:        tmp.ResendAPIKey,
-		ResendFrom:          tmp.ResendFrom,
+		JWTSecret:               tmp.JWTSecret,
+		TokenExpiry:             expiry,
+		ComposedSessions:        tmp.ComposedSessions,
+		ComposedIdentity:        tmp.ComposedIdentity,
+		DiscordClientID:         tmp.DiscordClientID,
+		DiscordClientSecret:     tmp.DiscordClientSecret,
+		DiscordRedirectURL:      tmp.DiscordRedirectURL,
+		ResendAPIKey:            tmp.ResendAPIKey,
+		ResendFrom:              tmp.ResendFrom,
+		OutboundDeliveryEnabled: tmp.OutboundDeliveryEnabled,
 	}
 	if cfg.ComposedSessions && cfg.JWTSecret != "" {
 		return cfg, fmt.Errorf("composed_sessions uses host identity.jwt.hs256; jwt_secret must not be configured in the cell")

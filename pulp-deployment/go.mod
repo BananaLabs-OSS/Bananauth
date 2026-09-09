@@ -11,6 +11,7 @@ require (
 	github.com/BananaLabs-OSS/Pulp-ext-oauth v0.0.0
 	github.com/BananaLabs-OSS/Pulp-ext-sqlite v0.0.0
 	github.com/BananaLabs-OSS/Pulp-ext-workers v0.0.0
+	github.com/bananalabs-oss/bananauth v0.0.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 )
 
@@ -43,4 +44,5 @@ replace (
 	github.com/BananaLabs-OSS/Pulp-ext-sqlite => ../../Pulp-ext-sqlite
 	github.com/BananaLabs-OSS/Pulp-ext-udp => ../../Pulp-ext-udp
 	github.com/BananaLabs-OSS/Pulp-ext-workers => ../../Pulp-ext-workers
+	github.com/bananalabs-oss/bananauth => ..
 )

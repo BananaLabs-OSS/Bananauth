@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BananaLabs-OSS/Fiber/pulp/effect"
+	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/bananalabs-oss/bananauth/pkg/passwordcrypto"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -56,7 +59,11 @@ func callResult[T any](t *testing.T, provider func([]byte) ([]byte, error), requ
 
 func newTestOwner(t *testing.T, store eventStore) *owner {
 	t.Helper()
-	value, err := openOwner(context.Background(), store)
+	keys, err := otpsecure.Parse("test-current-otp-key-material-32-bytes-minimum", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := openOwner(context.Background(), store, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +215,8 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if !callResult[AccountProjection](t, cell.nativeRegister, register).OK {
 		t.Fatal("register failed")
 	}
-	issue := PasswordResetIssueRequest{RequestID: "issue", OTPID: "otp", EffectID: "email", Email: register.Email, Code: "ABC123", Now: 110, ExpiresAt: 210}
+	now := time.Now().UTC().UnixMilli()
+	issue := PasswordResetIssueRequest{RequestID: "issue", OTPID: "otp", EffectID: "email", Email: register.Email, Code: "ABC123", Now: now, ExpiresAt: now + int64((10 * time.Minute).Milliseconds())}
 	if !callResult[PasswordResetIssueResult](t, cell.passwordResetIssue, issue).OK {
 		t.Fatal("issue failed")
 	}
@@ -228,8 +236,16 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if len(claimed.Leases) != 1 || claimed.Leases[0].Intent.Kind != effect.KindNotificationEmailSend {
 		t.Fatalf("claim = %#v", claimed)
 	}
-	payload, err := effect.DecodePayload[notificationEmailPayload](claimed.Leases[0].Intent)
+	var encrypted []byte
+	if err := msgpack.Unmarshal(claimed.Leases[0].Intent.Payload, &encrypted); err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := cell.otpKeys.Open(claimed.Leases[0].Intent.ID, encrypted)
 	if err != nil {
+		t.Fatal(err)
+	}
+	var payload notificationEmailPayload
+	if err := msgpack.Unmarshal(plain, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if payload.To != register.Email || payload.Subject != "Password reset code" || payload.Text == "" {
@@ -278,6 +294,20 @@ func TestSessionsEmailVerificationCreatesAndReusesTemporaryIdentity(t *testing.T
 	issued := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue)
 	if !issued.OK || !issued.Value.Accepted || !issued.Value.EffectQueued {
 		t.Fatalf("issue = %#v", issued)
+	}
+	queued := cell.state.Effects[issue.EffectID]
+	var encrypted []byte
+	if err := msgpack.Unmarshal(queued.Intent.Payload, &encrypted); err != nil {
+		t.Fatal(err)
+	}
+	plain, envelope, err := cell.otpKeys.Open(queued.Intent.ID, encrypted)
+	if err != nil || envelope.Recipient != "player@example.test" {
+		t.Fatalf("encrypted delivery envelope = %#v %v", envelope, err)
+	}
+	var email notificationEmailPayload
+	if err := msgpack.Unmarshal(plain, &email); err != nil ||
+		email.To != "player@example.test" || email.Subject == "" || email.Text == "" {
+		t.Fatalf("verification delivery was not bound to the one normalized request email: %#v %v", email, err)
 	}
 	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue); !got.OK || got.Value != issued.Value {
 		t.Fatalf("idempotent issue = %#v", got)
@@ -334,6 +364,110 @@ func TestSessionsEmailVerificationAcceptsEarlierCodeWhileReplacementIsInFlight(t
 		RequestID: "consume-newer-after-success", Email: "player@example.test", Code: "222222", Now: 201,
 	}); replay.OK || replay.Error == nil || replay.Error.Code != "invalid_code" {
 		t.Fatalf("outstanding replacement survived successful login: %#v", replay)
+	}
+}
+
+func TestEmailVerificationIssueIsOwnerThrottledBoundedAndHashed(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	for index := 0; index < emailVerificationOutstanding+1; index++ {
+		request := EmailVerificationIssueRequest{
+			RequestID: fmt.Sprintf("issue-%d", index), VerificationID: fmt.Sprintf("otp-%d", index),
+			EffectID: fmt.Sprintf("effect-%d", index), Email: " Player@Example.Test ", CallerKey: "192.0.2.10",
+			Code: fmt.Sprintf("12345%d", index), Now: 100 + int64(index), ExpiresAt: 1000,
+		}
+		result := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, request)
+		if !result.OK || !result.Value.Accepted {
+			t.Fatalf("issue %d = %#v", index, result)
+		}
+		if index < emailVerificationOutstanding && !result.Value.EffectQueued {
+			t.Fatalf("issue %d did not queue", index)
+		}
+		if index == emailVerificationOutstanding && result.Value.EffectQueued {
+			t.Fatal("throttled issue queued an effect")
+		}
+	}
+	if len(cell.state.OTPs) != emailVerificationOutstanding || len(cell.state.Effects) != emailVerificationOutstanding {
+		t.Fatalf("unbounded verification state: otps=%d effects=%d", len(cell.state.OTPs), len(cell.state.Effects))
+	}
+	for _, record := range cell.state.OTPs {
+		if record.Email != "player@example.test" || record.Code != "" || len(record.CodeHash) != 64 {
+			t.Fatalf("OTP material or recipient is not canonical: %#v", record)
+		}
+	}
+	snapshotWire, err := msgpack.Marshal(cell.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range [][]byte{[]byte("123450"), cell.otpKeys.Current} {
+		if bytes.Contains(snapshotWire, forbidden) {
+			t.Fatalf("snapshot persisted OTP secret material %q", forbidden)
+		}
+	}
+	if _, exists := cell.state.Rates[rateKey("email_verification_issue_caller", "192.0.2.10")]; exists {
+		t.Fatal("raw caller signal was persisted")
+	}
+}
+
+func TestEmailVerificationIssuePrunesExpiredOTPAndDeliveryEffect(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	first := EmailVerificationIssueRequest{RequestID: "first", VerificationID: "old-otp", EffectID: "old-effect", Email: "player@example.test", Code: "123456", Now: 100, ExpiresAt: 200}
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, first); !got.OK || !got.Value.EffectQueued {
+		t.Fatalf("first issue = %#v", got)
+	}
+	second := EmailVerificationIssueRequest{RequestID: "second", VerificationID: "new-otp", EffectID: "new-effect", Email: "player@example.test", Code: "654321", Now: 201, ExpiresAt: 400}
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, second); !got.OK || !got.Value.EffectQueued {
+		t.Fatalf("second issue = %#v", got)
+	}
+	if _, exists := cell.state.OTPs[first.VerificationID]; exists {
+		t.Fatal("expired OTP survived issuance pruning")
+	}
+	if _, exists := cell.state.Effects[first.EffectID]; exists {
+		t.Fatal("expired delivery effect survived issuance pruning")
+	}
+}
+
+func TestEmailVerificationEffectIdentityCannotReuseEncryptionNonce(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	first := EmailVerificationIssueRequest{RequestID: "first-effect", VerificationID: "otp-1", EffectID: "fixed-effect", Email: "one@example.test", Code: "123456", Now: 100, ExpiresAt: 1000}
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, first); !got.OK {
+		t.Fatalf("first=%#v", got)
+	}
+	second := EmailVerificationIssueRequest{RequestID: "second-effect", VerificationID: "otp-2", EffectID: "fixed-effect", Email: "two@example.test", Code: "654321", Now: 101, ExpiresAt: 1000}
+	got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, second)
+	if got.OK || got.Error == nil || got.Error.Code != "idempotency_conflict" {
+		t.Fatalf("effect identity reuse=%#v", got)
+	}
+}
+
+func TestEmailVerificationIssueThrottlesHashedCallerAcrossRecipients(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	for index := 0; index <= emailVerificationCallerMax; index++ {
+		request := EmailVerificationIssueRequest{
+			RequestID: fmt.Sprintf("caller-issue-%d", index), VerificationID: fmt.Sprintf("caller-otp-%d", index),
+			EffectID: fmt.Sprintf("caller-effect-%d", index), Email: fmt.Sprintf("player-%d@example.test", index),
+			CallerKey: "198.51.100.4", Code: fmt.Sprintf("%06d", index), Now: 100 + int64(index), ExpiresAt: 1000,
+		}
+		result := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, request)
+		if !result.OK || !result.Value.Accepted {
+			t.Fatalf("caller issue %d = %#v", index, result)
+		}
+		if (index < emailVerificationCallerMax) != result.Value.EffectQueued {
+			t.Fatalf("caller issue %d queued=%v", index, result.Value.EffectQueued)
+		}
+	}
+	if len(cell.state.Effects) != emailVerificationCallerMax {
+		t.Fatalf("caller throttle effects=%d want=%d", len(cell.state.Effects), emailVerificationCallerMax)
+	}
+}
+
+func TestEmailVerificationConsumesLegacyPlaintextSnapshotOTP(t *testing.T) {
+	cell := newTestOwner(t, &memoryEventStore{})
+	cell.state.OTPs["legacy"] = otpRecord{ID: "legacy", Email: "player@example.test", Code: "123456", Type: "sessions_email_verification", ExpiresAt: 300}
+	result := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+		RequestID: "consume-legacy", AccountID: "account", Email: "player@example.test", Code: "123456", Now: 200,
+	})
+	if !result.OK || !result.Value.Verified {
+		t.Fatalf("legacy OTP compatibility = %#v", result)
 	}
 }
 

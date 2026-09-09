@@ -13,6 +13,7 @@ import (
 
 	"github.com/BananaLabs-OSS/Fiber/pulp/effect"
 	"github.com/bananalabs-oss/bananauth/pkg/otpscope"
+	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/bananalabs-oss/bananauth/pkg/passwordcrypto"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -39,9 +40,52 @@ type otpRecord struct {
 	ID        string `msgpack:"id"`
 	Email     string `msgpack:"email"`
 	Code      string `msgpack:"code"`
+	CodeHash  string `msgpack:"code_hash,omitempty"`
 	Type      string `msgpack:"type"`
 	ExpiresAt int64  `msgpack:"expires_at"`
 	AccountID string `msgpack:"account_id"`
+}
+
+const (
+	emailVerificationWindowMillis = int64((10 * time.Minute) / time.Millisecond)
+	emailVerificationRecipientMax = 3
+	emailVerificationCallerMax    = 10
+	emailVerificationOutstanding  = 3
+)
+
+func (o *owner) otpMatches(record otpRecord, code string) bool {
+	if record.CodeHash != "" {
+		return o.otpKeys.VerifyCode(record.CodeHash, record.ID, record.Email, code, record.Type)
+	}
+	// Snapshots imported or written before the hashed OTP field remain
+	// consumable until their original expiry, then ordinary pruning removes them.
+	return record.Code != "" && record.Code == strings.ToUpper(strings.TrimSpace(code))
+}
+
+func pruneExpiredVerificationState(s *snapshot, now int64) {
+	for id, record := range s.OTPs {
+		if record.ExpiresAt <= now {
+			delete(s.OTPs, id)
+		}
+	}
+	for id, record := range s.Effects {
+		if record.ExpiresAt > 0 && record.ExpiresAt <= now {
+			delete(s.Effects, id)
+		}
+	}
+}
+
+func consumeIssueRate(s *snapshot, key string, now int64, maximum int) bool {
+	record := s.Rates[key]
+	if record.WindowStartedAt == 0 || now-record.WindowStartedAt >= emailVerificationWindowMillis {
+		record = rateRecord{WindowStartedAt: now}
+	}
+	if record.Count >= maximum {
+		return false
+	}
+	record.Count++
+	s.Rates[key] = record
+	return true
 }
 
 // notificationEmailPayload is the canonical kind-owned wire expected by the
@@ -95,9 +139,13 @@ type owner struct {
 	state    snapshot
 	receipts map[string]commandReceipt
 	store    eventStore
+	otpKeys  otpsecure.Keyring
 }
 
-func openOwner(ctx context.Context, store eventStore) (*owner, error) {
+func openOwner(ctx context.Context, store eventStore, otpKeys otpsecure.Keyring) (*owner, error) {
+	if len(otpKeys.Current) == 0 {
+		return nil, fmt.Errorf("open identity owner: OTP key is required")
+	}
 	if err := store.Migrate(ctx); err != nil {
 		return nil, err
 	}
@@ -110,7 +158,19 @@ func openOwner(ctx context.Context, store eventStore) (*owner, error) {
 	if state.RetentionLeases == nil {
 		state.RetentionLeases = map[string]RetentionLease{}
 	}
-	return &owner{state: state, receipts: receipts, store: store}, nil
+	return &owner{state: state, receipts: receipts, store: store, otpKeys: otpKeys}, nil
+}
+
+func (o *owner) notificationIntent(effectID, recipient, subject, text string, expiresAt int64) (effect.Intent, error) {
+	plain, err := msgpack.Marshal(notificationEmailPayload{To: recipient, Subject: subject, Text: text})
+	if err != nil {
+		return effect.Intent{}, err
+	}
+	encrypted, err := o.otpKeys.Seal(effectID, recipient, expiresAt, plain)
+	if err != nil {
+		return effect.Intent{}, err
+	}
+	return effect.NewIntent(effectID, effect.KindNotificationEmailSend, effectID, encrypted)
 }
 
 func (o *owner) providers() map[string]func([]byte) ([]byte, error) {
@@ -346,21 +406,20 @@ func (o *owner) passwordResetIssue(raw []byte) ([]byte, error) {
 		if blank(req.OTPID) || blank(req.EffectID) || blank(req.Code) || req.Now <= 0 || req.ExpiresAt <= req.Now {
 			return nil, domain("invalid_request", "password reset issue is incomplete")
 		}
+		if _, exists := s.Effects[req.EffectID]; exists {
+			return nil, domain("idempotency_conflict", "effect id already exists")
+		}
 		for id, value := range s.OTPs {
 			if value.Email == req.Email && value.Type == "password_reset" {
 				delete(s.OTPs, id)
 			}
 		}
-		s.OTPs[req.OTPID] = otpRecord{ID: req.OTPID, Email: req.Email, Code: strings.ToUpper(req.Code), Type: "password_reset", ExpiresAt: req.ExpiresAt, AccountID: credential.AccountID}
-		intent, err := effect.NewIntent(req.EffectID, effect.KindNotificationEmailSend, req.EffectID, notificationEmailPayload{
-			To:      req.Email,
-			Subject: "Password reset code",
-			Text:    fmt.Sprintf("Your reset code: %s\nExpires in 10 minutes.", strings.ToUpper(req.Code)),
-		})
+		s.OTPs[req.OTPID] = otpRecord{ID: req.OTPID, Email: req.Email, CodeHash: o.otpKeys.CodeMAC(req.OTPID, req.Email, req.Code, "password_reset"), Type: "password_reset", ExpiresAt: req.ExpiresAt, AccountID: credential.AccountID}
+		intent, err := o.notificationIntent(req.EffectID, req.Email, "Password reset code", fmt.Sprintf("Your reset code: %s\nExpires in 10 minutes.", strings.ToUpper(req.Code)), req.ExpiresAt)
 		if err != nil {
 			return nil, err
 		}
-		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now}
+		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now, ExpiresAt: req.ExpiresAt}
 		return PasswordResetIssueResult{Accepted: true, EffectQueued: true}, nil
 	})
 }
@@ -375,7 +434,7 @@ func (o *owner) passwordResetConsume(raw []byte) ([]byte, error) {
 		var id string
 		var otp otpRecord
 		for key, candidate := range s.OTPs {
-			if candidate.Email == req.Email && candidate.Type == "password_reset" && candidate.Code == strings.ToUpper(req.Code) && candidate.ExpiresAt > req.Now {
+			if candidate.Email == req.Email && candidate.Type == "password_reset" && o.otpMatches(candidate, req.Code) && candidate.ExpiresAt > req.Now {
 				id, otp = key, candidate
 				break
 			}
@@ -405,22 +464,42 @@ func (o *owner) emailVerificationIssue(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Email = otpscope.NormalizeEmail(req.Email)
+	req.CallerKey = strings.TrimSpace(req.CallerKey)
 	return o.command(FnEmailVerificationIssue, req.RequestID, req, func(s *snapshot) (any, error) {
 		if blank(req.VerificationID) || blank(req.EffectID) || blank(req.Email) || blank(req.Code) || req.Now <= 0 || req.ExpiresAt <= req.Now {
 			return nil, domain("invalid_request", "email verification issue is incomplete")
 		}
-		// Keep earlier unexpired codes valid until one is consumed. Delivery is
+		if _, exists := s.Effects[req.EffectID]; exists {
+			return nil, domain("idempotency_conflict", "effect id already exists")
+		}
+		pruneExpiredVerificationState(s, req.Now)
+		recipientRateKey := rateKey("email_verification_issue_recipient", req.Email)
+		callerAllowed := true
+		if req.CallerKey != "" {
+			callerDigest := sha256.Sum256([]byte("bananauth:verification-caller:v1\x00" + req.CallerKey))
+			callerAllowed = consumeIssueRate(s, rateKey("email_verification_issue_caller", hex.EncodeToString(callerDigest[:])), req.Now, emailVerificationCallerMax)
+		}
+		if !consumeIssueRate(s, recipientRateKey, req.Now, emailVerificationRecipientMax) || !callerAllowed {
+			return EmailVerificationIssueResult{Accepted: true}, nil
+		}
+		outstanding := 0
+		for _, value := range s.OTPs {
+			if value.Email == req.Email && value.Type == "sessions_email_verification" {
+				outstanding++
+			}
+		}
+		if outstanding >= emailVerificationOutstanding {
+			return EmailVerificationIssueResult{Accepted: true}, nil
+		}
+		// Keep a bounded number of earlier unexpired codes valid until one is consumed. Delivery is
 		// asynchronous, so deleting the prior OTP here can make a delayed newer
 		// email invalidate the only code the customer has actually received.
-		s.OTPs[req.VerificationID] = otpRecord{ID: req.VerificationID, Email: req.Email, Code: strings.ToUpper(req.Code), Type: "sessions_email_verification", ExpiresAt: req.ExpiresAt}
-		intent, err := effect.NewIntent(req.EffectID, effect.KindNotificationEmailSend, req.EffectID, notificationEmailPayload{
-			To: req.Email, Subject: "Your Sessions verification code",
-			Text: fmt.Sprintf("Your verification code: %s\nExpires in 30 minutes.", strings.ToUpper(req.Code)),
-		})
+		s.OTPs[req.VerificationID] = otpRecord{ID: req.VerificationID, Email: req.Email, CodeHash: o.otpKeys.CodeMAC(req.VerificationID, req.Email, req.Code, "sessions_email_verification"), Type: "sessions_email_verification", ExpiresAt: req.ExpiresAt}
+		intent, err := o.notificationIntent(req.EffectID, req.Email, "Your Sessions verification code", fmt.Sprintf("Your verification code: %s\nExpires in 10 minutes.", strings.ToUpper(req.Code)), req.ExpiresAt)
 		if err != nil {
 			return nil, err
 		}
-		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now}
+		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now, ExpiresAt: req.ExpiresAt}
 		return EmailVerificationIssueResult{Accepted: true, EffectQueued: true}, nil
 	})
 }
@@ -437,8 +516,9 @@ func (o *owner) emailVerificationConsume(raw []byte) ([]byte, error) {
 	idempotencyRequest := req
 	idempotencyRequest.Now = 0
 	return o.command(FnEmailVerificationConsume, req.RequestID, idempotencyRequest, func(s *snapshot) (any, error) {
+		pruneExpiredVerificationState(s, req.Now)
 		for _, value := range s.OTPs {
-			if value.Email == req.Email && value.Type == "sessions_email_verification" && value.Code == strings.ToUpper(req.Code) && value.ExpiresAt > req.Now {
+			if value.Email == req.Email && value.Type == "sessions_email_verification" && o.otpMatches(value, req.Code) && value.ExpiresAt > req.Now {
 				accountID := accountIDForEmail(s, req.Email)
 				if accountID == "" {
 					if blank(req.AccountID) {
@@ -900,7 +980,7 @@ func (o *owner) legacyImport(raw []byte) ([]byte, error) {
 		}
 		for _, row := range req.OTPs {
 			row.Email = otpscope.NormalizeEmail(row.Email)
-			value := otpRecord{ID: row.ID, Email: row.Email, Code: strings.ToUpper(row.Code), Type: row.Type, ExpiresAt: row.ExpiresAt, AccountID: row.AccountID}
+			value := otpRecord{ID: row.ID, Email: row.Email, CodeHash: o.otpKeys.CodeMAC(row.ID, row.Email, row.Code, row.Type), Type: row.Type, ExpiresAt: row.ExpiresAt, AccountID: row.AccountID}
 			if row.AccountID != "" {
 				if _, ok := next.Accounts[row.AccountID]; !ok {
 					return nil, domain("invalid_import", "legacy OTP references a missing account")
@@ -930,6 +1010,22 @@ const effectOwner = "auth-identity"
 func leaseToken(id, consumer string, until int64, attempt uint32) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d", id, consumer, until, attempt)))
 	return hex.EncodeToString(sum[:])
+}
+
+func legacyNotificationEffectHasLiveOTP(s *snapshot, record ownerEffect, now int64) bool {
+	if record.ExpiresAt > 0 {
+		return record.ExpiresAt > now
+	}
+	var payload notificationEmailPayload
+	if err := msgpack.Unmarshal(record.Intent.Payload, &payload); err != nil || payload.To == "" {
+		return false
+	}
+	for _, otp := range s.OTPs {
+		if otp.ExpiresAt > now && strings.EqualFold(otp.Email, payload.To) {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
@@ -962,6 +1058,7 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 	}
 	requestID := fmt.Sprintf("%s:%d", req.ConsumerID, time.Now().UTC().UnixNano())
 	return o.commandRaw(FnEffectsClaim, requestID, req, func(s *snapshot) (any, error) {
+		pruneExpiredVerificationState(s, now)
 		ids := make([]string, 0, len(s.Effects))
 		for id := range s.Effects {
 			ids = append(ids, id)
@@ -970,6 +1067,10 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 		leases := []effect.Lease{}
 		for _, id := range ids {
 			record := s.Effects[id]
+			if !legacyNotificationEffectHasLiveOTP(s, record, now) {
+				delete(s.Effects, id)
+				continue
+			}
 			if record.Status != string(effect.Pending) || record.AvailableAt > now || (record.Lease != nil && record.Lease.LeasedUntilUnixMilli > now) {
 				continue
 			}

@@ -29,3 +29,4 @@ discord_redirect_url = ""
 # to stdout instead (dev mode).
 resend_api_key = ""
 resend_from = "no-reply@example.com"
+outbound_delivery_enabled = "${OUTBOUND_DELIVERY_ENABLED}"

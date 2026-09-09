@@ -260,6 +260,7 @@ func (h *AuthHandler) issueEmailVerificationComposed(c *pulpgin.Context) {
 		"verification_id": uuid.NewString(),
 		"effect_id":       uuid.NewString(),
 		"email":           otpscope.NormalizeEmail(req.Email),
+		"caller_key":      c.ClientIP(),
 		"code":            authcrypto.GenerateOTP(),
 		"now":             now.UnixMilli(),
 		"expires_at":      now.Add(10 * time.Minute).UnixMilli(),
