@@ -2,9 +2,10 @@ package main
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -30,6 +31,12 @@ type requestConflictError struct{ operation string }
 
 func (e requestConflictError) Error() string {
 	return fmt.Sprintf("request id was reused with a different %s payload", e.operation)
+}
+
+type sessionMutationConflictError struct{ operation string }
+
+func (e sessionMutationConflictError) Error() string {
+	return fmt.Sprintf("session already owns a competing %s result", e.operation)
 }
 
 func newMemoryStore() *memoryStore {
@@ -80,23 +87,22 @@ func (s *memoryStore) Revoke(req RevokeRequest) (Session, bool, error) {
 	if !ok {
 		return Session{}, false, nil
 	}
-	if value.RevokedAt == 0 {
-		value.RevokedAt = req.RevokedAt
-		value.Active = false
-		s.sessions[value.SessionID] = value
+	if value.RevokedAt != 0 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke"}
 	}
+	value.RevokedAt = req.RevokedAt
+	value.Active = false
+	s.sessions[value.SessionID] = value
 	s.requests[key] = commandReceipt{Digest: digest, Session: value}
 	return value, true, nil
 }
 
-type sqlGuest interface {
-	Exec(string, ...any) error
-	Query(string, ...any) ([][]any, error)
-}
+type sqliteStore struct{ db *sql.DB }
 
-type sqliteStore struct{ db sqlGuest }
-
-func newSQLiteStore(db sqlGuest) (*sqliteStore, error) {
+func newSQLiteStore(db *sql.DB) (*sqliteStore, error) {
+	if db == nil {
+		return nil, errors.New("auth session database is required")
+	}
 	s := &sqliteStore{db: db}
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -104,108 +110,200 @@ func newSQLiteStore(db sqlGuest) (*sqliteStore, error) {
 			account_id TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL,
-			revoked_at INTEGER NOT NULL DEFAULT 0
+			revoked_at INTEGER NOT NULL DEFAULT 0,
+			version INTEGER NOT NULL DEFAULT 1
 		)`,
 		`CREATE TABLE IF NOT EXISTS auth_session_commands (
 			operation TEXT NOT NULL,
 			request_id TEXT NOT NULL,
 			request_digest TEXT NOT NULL,
 			session_id TEXT NOT NULL,
+			account_id TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL DEFAULT 0,
+			expires_at INTEGER NOT NULL DEFAULT 0,
+			revoked_at INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY(operation, request_id)
 		)`,
 	} {
-		if err := s.db.Exec(statement); err != nil {
+		if _, err := s.db.Exec(statement); err != nil {
 			return nil, fmt.Errorf("migrate auth session owner: %w", err)
 		}
+	}
+	for _, statement := range []string{
+		`ALTER TABLE auth_sessions ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE auth_session_commands ADD COLUMN account_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE auth_session_commands ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE auth_session_commands ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE auth_session_commands ADD COLUMN revoked_at INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := s.db.Exec(statement); err != nil && !duplicateColumn(err) {
+			return nil, fmt.Errorf("migrate auth session owner: %w", err)
+		}
+	}
+	// Old command rows did not store immutable result snapshots. Preserve their
+	// replay behavior with the best durable state available at migration time;
+	// every new command records its exact result in the creating transaction.
+	if _, err := s.db.Exec(`UPDATE auth_session_commands SET
+		account_id=COALESCE((SELECT account_id FROM auth_sessions WHERE auth_sessions.session_id=auth_session_commands.session_id), account_id),
+		created_at=COALESCE((SELECT created_at FROM auth_sessions WHERE auth_sessions.session_id=auth_session_commands.session_id), created_at),
+		expires_at=COALESCE((SELECT expires_at FROM auth_sessions WHERE auth_sessions.session_id=auth_session_commands.session_id), expires_at),
+		revoked_at=COALESCE((SELECT revoked_at FROM auth_sessions WHERE auth_sessions.session_id=auth_session_commands.session_id), revoked_at)
+		WHERE account_id=''`); err != nil {
+		return nil, fmt.Errorf("migrate auth session command results: %w", err)
 	}
 	return s, nil
 }
 
+func duplicateColumn(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate column") || strings.Contains(message, "already exists")
+}
+
 func (s *sqliteStore) Create(req CreateRequest) (Session, error) {
 	digest := createDigest(req)
-	if prior, ok, err := s.byRequest("create", req.RequestID, digest); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Session{}, err
+	}
+	defer tx.Rollback()
+	if prior, ok, err := byRequest(tx, "create", req.RequestID, digest); err != nil {
 		return Session{}, err
 	} else if ok {
 		return prior, nil
 	}
-	if prior, ok, err := s.Get(req.SessionID); err != nil {
-		return Session{}, err
-	} else if ok {
-		if prior.AccountID != req.AccountID || prior.CreatedAt != req.CreatedAt || prior.ExpiresAt != req.ExpiresAt {
-			return Session{}, fmt.Errorf("session id already belongs to a different session")
-		}
-		if err := s.db.Exec(`INSERT INTO auth_session_commands(operation, request_id, request_digest, session_id) VALUES (?, ?, ?, ?)`, "create", req.RequestID, digest, req.SessionID); err != nil {
-			return Session{}, err
-		}
-		return prior, nil
-	}
-	if err := s.db.Exec(`INSERT INTO auth_sessions(session_id, account_id, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, 0)`,
-		req.SessionID, req.AccountID, req.CreatedAt, req.ExpiresAt); err != nil {
+	result, err := tx.Exec(`INSERT INTO auth_sessions(session_id, account_id, created_at, expires_at, revoked_at, version)
+		VALUES (?, ?, ?, ?, 0, 1) ON CONFLICT(session_id) DO NOTHING`, req.SessionID, req.AccountID, req.CreatedAt, req.ExpiresAt)
+	if err != nil {
 		return Session{}, err
 	}
-	if err := s.db.Exec(`INSERT INTO auth_session_commands(operation, request_id, request_digest, session_id) VALUES (?, ?, ?, ?)`, "create", req.RequestID, digest, req.SessionID); err != nil {
+	inserted, err := result.RowsAffected()
+	if err != nil {
 		return Session{}, err
 	}
-	value, _, err := s.Get(req.SessionID)
-	return value, err
+	value, version, ok, err := getSession(tx, req.SessionID)
+	if err != nil || !ok {
+		return Session{}, fmt.Errorf("load created auth session: %w", err)
+	}
+	if inserted == 0 && (value.AccountID != req.AccountID || value.CreatedAt != req.CreatedAt || value.ExpiresAt != req.ExpiresAt || value.RevokedAt != 0 || version < 1) {
+		return Session{}, fmt.Errorf("session id already belongs to a different session")
+	}
+	if err = insertCommand(tx, "create", req.RequestID, digest, value); err != nil {
+		return Session{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Session{}, err
+	}
+	return value, nil
 }
 
 func (s *sqliteStore) Get(id string) (Session, bool, error) {
-	rows, err := s.db.Query(`SELECT session_id, account_id, created_at, expires_at, revoked_at FROM auth_sessions WHERE session_id = ?`, id)
-	if err != nil {
-		return Session{}, false, err
-	}
-	if len(rows) == 0 {
-		return Session{}, false, nil
-	}
-	if len(rows) != 1 || len(rows[0]) != 5 {
-		return Session{}, false, fmt.Errorf("invalid auth session row")
-	}
-	value, err := scanSession(rows[0])
-	return value, err == nil, err
+	value, _, ok, err := getSession(s.db, id)
+	return value, ok, err
 }
 
 func (s *sqliteStore) Revoke(req RevokeRequest) (Session, bool, error) {
 	digest := revokeDigest(req)
-	if prior, ok, err := s.byRequest("revoke", req.RequestID, digest); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Session{}, false, err
+	}
+	defer tx.Rollback()
+	if prior, ok, err := byRequest(tx, "revoke", req.RequestID, digest); err != nil {
 		return Session{}, false, err
 	} else if ok {
 		return prior, true, nil
 	}
-	value, ok, err := s.Get(req.SessionID)
+	value, version, ok, err := getSession(tx, req.SessionID)
 	if err != nil || !ok {
 		return value, ok, err
 	}
-	if value.RevokedAt == 0 {
-		if err := s.db.Exec(`UPDATE auth_sessions SET revoked_at = ? WHERE session_id = ? AND revoked_at = 0`, req.RevokedAt, req.SessionID); err != nil {
-			return Session{}, false, err
-		}
+	if value.RevokedAt != 0 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke"}
 	}
-	if err := s.db.Exec(`INSERT INTO auth_session_commands(operation, request_id, request_digest, session_id) VALUES (?, ?, ?, ?)`, "revoke", req.RequestID, digest, req.SessionID); err != nil {
-		return Session{}, false, err
-	}
-	value, _, err = s.Get(req.SessionID)
-	return value, err == nil, err
-}
-
-func (s *sqliteStore) byRequest(operation, requestID, digest string) (Session, bool, error) {
-	rows, err := s.db.Query(`SELECT s.session_id, s.account_id, s.created_at, s.expires_at, s.revoked_at, c.request_digest
-		FROM auth_session_commands c JOIN auth_sessions s ON s.session_id = c.session_id
-		WHERE c.operation = ? AND c.request_id = ?`, operation, requestID)
+	result, err := tx.Exec(`UPDATE auth_sessions SET revoked_at=?, version=version+1 WHERE session_id=? AND revoked_at=0 AND version=?`, req.RevokedAt, req.SessionID, version)
 	if err != nil {
 		return Session{}, false, err
 	}
-	if len(rows) == 0 {
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Session{}, false, err
+	}
+	if changed != 1 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke"}
+	}
+	value.RevokedAt = req.RevokedAt
+	value.Active = false
+	if err = insertCommand(tx, "revoke", req.RequestID, digest, value); err != nil {
+		return Session{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Session{}, false, err
+	}
+	return value, true, nil
+}
+
+func (s *sqliteStore) byRequest(operation, requestID, digest string) (Session, bool, error) {
+	return byRequest(s.db, operation, requestID, digest)
+}
+
+type sqlQuerier interface {
+	QueryRow(string, ...any) *sql.Row
+}
+
+func byRequest(db sqlQuerier, operation, requestID, digest string) (Session, bool, error) {
+	var value Session
+	var storedDigest string
+	err := db.QueryRow(`SELECT session_id, account_id, created_at, expires_at, revoked_at, request_digest
+		FROM auth_session_commands WHERE operation=? AND request_id=?`, operation, requestID).
+		Scan(&value.SessionID, &value.AccountID, &value.CreatedAt, &value.ExpiresAt, &value.RevokedAt, &storedDigest)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, false, nil
 	}
-	if len(rows[0]) != 6 {
-		return Session{}, false, fmt.Errorf("invalid auth session command row")
+	if err != nil {
+		return Session{}, false, err
 	}
-	if stringValue(rows[0][5]) != digest {
+	if storedDigest != digest {
 		return Session{}, false, requestConflictError{operation: operation}
 	}
-	value, err := scanSession(rows[0][:5])
-	return value, err == nil, err
+	value.Active = value.RevokedAt == 0
+	return value, true, nil
+}
+
+func getSession(db sqlQuerier, id string) (Session, int64, bool, error) {
+	var value Session
+	var version int64
+	err := db.QueryRow(`SELECT session_id, account_id, created_at, expires_at, revoked_at, version FROM auth_sessions WHERE session_id=?`, id).
+		Scan(&value.SessionID, &value.AccountID, &value.CreatedAt, &value.ExpiresAt, &value.RevokedAt, &version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, 0, false, nil
+	}
+	if err != nil {
+		return Session{}, 0, false, err
+	}
+	value.Active = value.RevokedAt == 0
+	return value, version, true, nil
+}
+
+func insertCommand(tx *sql.Tx, operation, requestID, digest string, value Session) error {
+	result, err := tx.Exec(`INSERT INTO auth_session_commands(operation,request_id,request_digest,session_id,account_id,created_at,expires_at,revoked_at)
+		VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(operation,request_id) DO NOTHING`, operation, requestID, digest, value.SessionID, value.AccountID, value.CreatedAt, value.ExpiresAt, value.RevokedAt)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		prior, ok, replayErr := byRequest(tx, operation, requestID, digest)
+		if replayErr != nil {
+			return replayErr
+		}
+		if !ok || prior != value {
+			return requestConflictError{operation: operation}
+		}
+	}
+	return nil
 }
 
 func createDigest(req CreateRequest) string {
@@ -219,58 +317,6 @@ func revokeDigest(req RevokeRequest) string {
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-func scanSession(row []any) (Session, error) {
-	if len(row) != 5 {
-		return Session{}, fmt.Errorf("invalid auth session row")
-	}
-	created, err := int64Value(row[2])
-	if err != nil {
-		return Session{}, err
-	}
-	expires, err := int64Value(row[3])
-	if err != nil {
-		return Session{}, err
-	}
-	revoked, err := int64Value(row[4])
-	if err != nil {
-		return Session{}, err
-	}
-	value := Session{
-		SessionID: stringValue(row[0]), AccountID: stringValue(row[1]),
-		CreatedAt: created, ExpiresAt: expires, RevokedAt: revoked,
-	}
-	value.Active = value.RevokedAt == 0
-	return value, nil
-}
-
-func stringValue(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return typed
-	case []byte:
-		return string(typed)
-	default:
-		return fmt.Sprint(value)
-	}
-}
-
-func int64Value(value any) (int64, error) {
-	switch typed := value.(type) {
-	case int64:
-		return typed, nil
-	case int:
-		return int64(typed), nil
-	case uint64:
-		return int64(typed), nil
-	case []byte:
-		return strconv.ParseInt(string(typed), 10, 64)
-	case string:
-		return strconv.ParseInt(typed, 10, 64)
-	default:
-		return 0, fmt.Errorf("invalid integer value %T", value)
-	}
 }
 
 func blank(value string) bool { return strings.TrimSpace(value) == "" }

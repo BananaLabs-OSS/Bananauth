@@ -72,6 +72,10 @@ func (o *owner) revoke(raw []byte) ([]byte, error) {
 		if errors.As(err, &conflict) {
 			return encode(failure[Session]("idempotency_conflict", conflict.Error()))
 		}
+		var competing sessionMutationConflictError
+		if errors.As(err, &competing) {
+			return encode(failure[Session]("mutation_conflict", competing.Error()))
+		}
 		return nil, fmt.Errorf("revoke auth session: %w", err)
 	}
 	if !ok {
