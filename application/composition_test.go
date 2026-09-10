@@ -32,7 +32,7 @@ func TestApplicationManifestIsAcyclicAndCapabilityScoped(t *testing.T) {
 	if _, err := toml.DecodeFile("pulp.app.toml", &app); err != nil {
 		t.Fatal(err)
 	}
-	if app.Name != "bananauth" || len(app.Cells) != 4 {
+	if app.Name != "bananauth" || len(app.Cells) != 5 {
 		t.Fatalf("app = %#v", app)
 	}
 	script, err := os.ReadFile(app.Orchestrator.Script)

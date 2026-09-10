@@ -1,0 +1,13 @@
+name = "auth-browser-session"
+version = "0.1.0"
+wasm = "auth-browser-session.wasm"
+wasm_sha256 = "c135a8e070a737a162a5fc12ac793ebb552604e66ffdfadf429ca6d0cef2bdd9"
+
+provides = ["auth.browser-session.v1.resolve"]
+consumes = ["auth.session.v1.get"]
+depends_on = ["auth-session"]
+
+# This stateless credential boundary verifies host-owned JWTs and asks the
+# durable session owner for the current lifecycle fact. It owns no storage,
+# browser credential, session lifecycle, transport, delivery, or network.
+capabilities = ["identity.jwt.hs256"]

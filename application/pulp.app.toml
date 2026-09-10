@@ -5,6 +5,7 @@ require_wasm_sha256 = true
 cells = [
   "../identity-owner/pulp.cell.toml",
   "../session-owner/pulp.cell.toml",
+  "../browser-session-boundary/pulp.cell.toml",
   "lua-orchestrator.pulp.cell.toml",
   "bananauth-http.pulp.cell.toml",
 ]
