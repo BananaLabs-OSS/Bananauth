@@ -18,7 +18,6 @@ import (
 	dsql "database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -70,13 +69,8 @@ func bootstrap(configBytes []byte) error {
 	// the OTP is printed to cell stdout instead so local testing
 	// can still exercise the reset flow.
 	sendEmail := func(to, code string) error {
-		if !outboundDeliveryEnabled(cfg.OutboundDeliveryEnabled) {
-			return fmt.Errorf("outbound delivery is disabled")
-		}
-		if cfg.ResendAPIKey == "" {
-			// Parity with native Bananauth/internal/handlers/auth.go:306.
-			log.Printf("Password reset OTP for %s: %s", to, code)
-			return nil
+		if err := validateLegacyOutboundDelivery(cfg.OutboundDeliveryEnabled, cfg.ResendAPIKey); err != nil {
+			return err
 		}
 		body, _ := json.Marshal(map[string]any{
 			"from":    cfg.ResendFrom,
@@ -183,6 +177,19 @@ func bootstrap(configBytes []byte) error {
 
 func outboundDeliveryEnabled(value string) bool {
 	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+// validateLegacyOutboundDelivery fails closed before any recipient or OTP is
+// rendered, logged, or handed to HTTP. A missing delivery credential is an
+// unavailable service, never a development-mode plaintext disclosure path.
+func validateLegacyOutboundDelivery(enabled, apiKey string) error {
+	if !outboundDeliveryEnabled(enabled) {
+		return fmt.Errorf("outbound delivery is disabled")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return fmt.Errorf("outbound delivery credential is not configured")
+	}
+	return nil
 }
 
 // oauthConfigured deliberately has separate composed and legacy paths.

@@ -25,8 +25,8 @@ discord_client_id = ""
 discord_client_secret = ""
 discord_redirect_url = ""
 
-# Resend API for password-reset emails. Leave blank to log OTP codes
-# to stdout instead (dev mode).
+# Resend API for password-reset emails. Delivery fails closed when either the
+# explicit activation gate or this credential is absent; OTPs are never logged.
 resend_api_key = ""
 resend_from = "no-reply@example.com"
 outbound_delivery_enabled = "${OUTBOUND_DELIVERY_ENABLED}"

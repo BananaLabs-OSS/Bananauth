@@ -35,7 +35,7 @@ provides = [
 ]
 consumes = []
 depends_on = []
-capabilities = ["storage.sqlite", "workers"]
+capabilities = ["storage.sqlite"]
 
 [config]
 otp_key_current = ""
