@@ -153,12 +153,16 @@ func openOwner(ctx context.Context, store eventStore, otpKeys otpsecure.Keyring)
 	if err != nil {
 		return nil, err
 	}
+	normalizeSnapshot(&state)
+	return &owner{state: state, receipts: receipts, store: store, otpKeys: otpKeys}, nil
+}
+
+func normalizeSnapshot(state *snapshot) {
 	// New durable fields must be usable when replaying snapshots written by an
 	// earlier owner version.
 	if state.RetentionLeases == nil {
 		state.RetentionLeases = map[string]RetentionLease{}
 	}
-	return &owner{state: state, receipts: receipts, store: store, otpKeys: otpKeys}, nil
 }
 
 func (o *owner) notificationIntent(effectID, recipient, subject, text string, expiresAt int64) (effect.Intent, error) {
@@ -207,33 +211,46 @@ func (o *owner) command(operation, requestID string, request any, mutate func(*s
 	}
 	sum := sha256.Sum256(requestWire)
 	digest := hex.EncodeToString(sum[:])
-	key := operation + ":" + requestID
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if prior, ok := o.receipts[key]; ok {
-		if prior.Digest != digest {
-			return encode(failure[any]("idempotency_conflict", "request_id was reused with a different payload"))
+	for attempt := 0; attempt < 128; attempt++ {
+		revision, current, prior, err := o.store.LoadCommand(context.Background(), operation, requestID)
+		if err != nil {
+			return nil, fmt.Errorf("refresh %s: %w", operation, err)
 		}
-		return append([]byte(nil), prior.Response...), nil
-	}
-	next := o.state.clone()
-	value, err := mutate(&next)
-	if err != nil {
-		if typed, ok := err.(domainError); ok {
-			return encode(failure[any](typed.code, typed.message))
+		normalizeSnapshot(&current)
+		o.state = current
+		if prior != nil {
+			if prior.Digest != digest {
+				return encode(failure[any]("idempotency_conflict", "request_id was reused with a different payload"))
+			}
+			o.receipts[operation+":"+requestID] = *prior
+			return append([]byte(nil), prior.Response...), nil
 		}
-		return nil, err
+		next := current.clone()
+		value, err := mutate(&next)
+		if err != nil {
+			if typed, ok := err.(domainError); ok {
+				return encode(failure[any](typed.code, typed.message))
+			}
+			return nil, err
+		}
+		response, err := encode(success(value))
+		if err != nil {
+			return nil, err
+		}
+		receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
+		committed, err := o.store.AppendCAS(context.Background(), revision, durableRecord{Receipt: receipt, Snapshot: next})
+		if err != nil {
+			return nil, fmt.Errorf("persist %s: %w", operation, err)
+		}
+		if !committed {
+			continue
+		}
+		o.state, o.receipts[operation+":"+requestID] = next, receipt
+		return response, nil
 	}
-	response, err := encode(success(value))
-	if err != nil {
-		return nil, err
-	}
-	receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
-	if err := o.store.Append(context.Background(), durableRecord{Receipt: receipt, Snapshot: next}); err != nil {
-		return nil, fmt.Errorf("persist %s: %w", operation, err)
-	}
-	o.state, o.receipts[key] = next, receipt
-	return response, nil
+	return nil, fmt.Errorf("persist %s: owner revision remained contended", operation)
 }
 
 func (o *owner) commandRaw(operation, requestID string, request any, mutate func(*snapshot) (any, error)) ([]byte, error) {
@@ -246,36 +263,55 @@ func (o *owner) commandRaw(operation, requestID string, request any, mutate func
 	}
 	sum := sha256.Sum256(requestWire)
 	digest := hex.EncodeToString(sum[:])
-	key := operation + ":" + requestID
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if prior, ok := o.receipts[key]; ok {
-		if prior.Digest != digest {
-			return nil, fmt.Errorf("request_id was reused with a different payload")
+	for attempt := 0; attempt < 128; attempt++ {
+		revision, current, prior, err := o.store.LoadCommand(context.Background(), operation, requestID)
+		if err != nil {
+			return nil, fmt.Errorf("refresh %s: %w", operation, err)
 		}
-		return append([]byte(nil), prior.Response...), nil
+		normalizeSnapshot(&current)
+		o.state = current
+		if prior != nil {
+			if prior.Digest != digest {
+				return nil, fmt.Errorf("request_id was reused with a different payload")
+			}
+			o.receipts[operation+":"+requestID] = *prior
+			return append([]byte(nil), prior.Response...), nil
+		}
+		next := current.clone()
+		value, err := mutate(&next)
+		if err != nil {
+			return nil, err
+		}
+		response, err := msgpack.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
+		committed, err := o.store.AppendCAS(context.Background(), revision, durableRecord{Receipt: receipt, Snapshot: next})
+		if err != nil {
+			return nil, fmt.Errorf("persist %s: %w", operation, err)
+		}
+		if !committed {
+			continue
+		}
+		o.state, o.receipts[operation+":"+requestID] = next, receipt
+		return response, nil
 	}
-	next := o.state.clone()
-	value, err := mutate(&next)
-	if err != nil {
-		return nil, err
-	}
-	response, err := msgpack.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
-	if err := o.store.Append(context.Background(), durableRecord{Receipt: receipt, Snapshot: next}); err != nil {
-		return nil, fmt.Errorf("persist %s: %w", operation, err)
-	}
-	o.state, o.receipts[key] = next, receipt
-	return response, nil
+	return nil, fmt.Errorf("persist %s: owner revision remained contended", operation)
 }
 
 func (o *owner) query(run func(snapshot) (any, error)) ([]byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	value, err := run(o.state)
+	_, current, _, err := o.store.LoadCommand(context.Background(), "", "")
+	if err != nil {
+		return nil, fmt.Errorf("refresh identity query: %w", err)
+	}
+	normalizeSnapshot(&current)
+	o.state = current
+	value, err := run(current)
 	if err != nil {
 		if typed, ok := err.(domainError); ok {
 			return encode(failure[any](typed.code, typed.message))

@@ -461,8 +461,13 @@ func TestEmailVerificationIssueThrottlesHashedCallerAcrossRecipients(t *testing.
 }
 
 func TestEmailVerificationConsumesLegacyPlaintextSnapshotOTP(t *testing.T) {
-	cell := newTestOwner(t, &memoryEventStore{})
-	cell.state.OTPs["legacy"] = otpRecord{ID: "legacy", Email: "player@example.test", Code: "123456", Type: "sessions_email_verification", ExpiresAt: 300}
+	state := newSnapshot()
+	state.OTPs["legacy"] = otpRecord{ID: "legacy", Email: "player@example.test", Code: "123456", Type: "sessions_email_verification", ExpiresAt: 300}
+	store := &memoryEventStore{records: []durableRecord{{
+		Receipt:  commandReceipt{Operation: "legacy.seed", RequestID: "legacy", Digest: "legacy", Response: []byte("legacy")},
+		Snapshot: state,
+	}}}
+	cell := newTestOwner(t, store)
 	result := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
 		RequestID: "consume-legacy", AccountID: "account", Email: "player@example.test", Code: "123456", Now: 200,
 	})
