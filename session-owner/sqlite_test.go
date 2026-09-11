@@ -61,6 +61,48 @@ func TestSQLiteStoreSurvivesRestartAndDeduplicatesCommands(t *testing.T) {
 	}
 }
 
+func TestSQLiteOwnerClockReceiptsSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newSQLiteStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := CreateOwnedRequest{RequestID: "create-owned", SessionID: "session-owned", AccountID: "account-owned", LifetimeMillis: 60_000}
+	created, err := store.CreateOwned(create, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke := RevokeOwnedRequest{RequestID: "revoke-owned", SessionID: created.SessionID}
+	revoked, ok, err := store.RevokeOwned(revoke, 200)
+	if err != nil || !ok {
+		t.Fatalf("revoke = %#v %v %v", revoked, ok, err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restarted, err := newSQLiteStore(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createReplay, err := restarted.CreateOwned(create, 999)
+	if err != nil || createReplay != created {
+		t.Fatalf("create replay = %#v %v", createReplay, err)
+	}
+	revokeReplay, ok, err := restarted.RevokeOwned(revoke, 999)
+	if err != nil || !ok || revokeReplay != revoked {
+		t.Fatalf("revoke replay = %#v %v %v", revokeReplay, ok, err)
+	}
+}
+
 func TestSQLiteStoreCreateAndReceiptRollbackTogether(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "create-crash.db"))
 	if err != nil {

@@ -146,6 +146,7 @@ func bootstrap(configBytes []byte) error {
 		// durable verification state.
 		auth.POST("/email-verification", authH.IssueEmailVerification)
 		auth.POST("/email-verification/consume", authH.ConsumeEmailVerification)
+		auth.POST("/email-verification/session", authH.CompleteEmailVerificationSession)
 	}
 	if oauthH != nil {
 		auth.GET("/oauth/discord", oauthH.DiscordAuthorize)

@@ -31,12 +31,20 @@ pulp.on("bananauth.session.created.v1", function(payload)
   return owner_call(SESSION_OWNER, "auth.session.v1.create", decode_request(payload))
 end)
 
+pulp.on("bananauth.session.created-owned.v1", function(payload)
+  return owner_call(SESSION_OWNER, "auth.session.v1.create-owned", decode_request(payload))
+end)
+
 pulp.on("bananauth.session.verified.v1", function(payload)
   return owner_call(SESSION_OWNER, "auth.session.v1.get", decode_request(payload))
 end)
 
 pulp.on("bananauth.session.revoked.v1", function(payload)
   return owner_call(SESSION_OWNER, "auth.session.v1.revoke", decode_request(payload))
+end)
+
+pulp.on("bananauth.session.revoked-owned.v1", function(payload)
+  return owner_call(SESSION_OWNER, "auth.session.v1.revoke-owned", decode_request(payload))
 end)
 
 local IDENTITY_EVENTS = {

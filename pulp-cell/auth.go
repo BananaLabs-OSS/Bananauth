@@ -153,6 +153,14 @@ func (h *AuthHandler) ConsumeEmailVerification(c *pulpgin.Context) {
 	h.consumeEmailVerificationComposed(c)
 }
 
+func (h *AuthHandler) CompleteEmailVerificationSession(c *pulpgin.Context) {
+	if h.identity == nil {
+		c.JSON(http.StatusNotImplemented, middleware.ErrorResponse{Error: "composed_identity_required"})
+		return
+	}
+	h.completeEmailVerificationSessionComposed(c)
+}
+
 func (h *AuthHandler) Login(c *pulpgin.Context) {
 	if h.identity != nil {
 		h.loginComposed(c)
@@ -200,7 +208,13 @@ func (h *AuthHandler) Login(c *pulpgin.Context) {
 func (h *AuthHandler) Logout(c *pulpgin.Context) {
 	sessionID, _ := c.Get("session_id")
 	if sid, ok := sessionID.(string); ok {
-		h.sessions.Revoke(sid)
+		if err := h.sessions.RevokeChecked(sid); err != nil {
+			c.JSON(http.StatusServiceUnavailable, middleware.ErrorResponse{Error: "session_revoke_unavailable"})
+			return
+		}
+	} else {
+		c.JSON(http.StatusUnauthorized, middleware.ErrorResponse{Error: "unauthorized"})
+		return
 	}
 	c.JSON(http.StatusOK, pulpgin.H{"message": "logged out"})
 }

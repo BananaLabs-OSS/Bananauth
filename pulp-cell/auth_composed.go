@@ -303,6 +303,76 @@ func (h *AuthHandler) consumeEmailVerificationComposed(c *pulpgin.Context) {
 	c.JSON(http.StatusOK, pulpgin.H{"verified": true, "account_id": verified.Value.AccountID})
 }
 
+type completedEmailSession struct {
+	Token     string
+	ExpiresIn int
+	AccountID string
+	SessionID string
+	ExpiresAt int64
+}
+
+// completeEmailSession is the replay-safe cross-owner workflow. Identity and
+// session are separate owners, so atomicity comes from a stable request plus
+// each owner's durable receipt: any interruption can repeat both steps.
+func (h *AuthHandler) completeEmailSession(req EmailVerificationSessionRequest) (completedEmailSession, string, error) {
+	requestUUID, err := uuid.Parse(req.RequestID)
+	if err != nil || requestUUID.String() != req.RequestID {
+		return completedEmailSession{}, "invalid_request", nil
+	}
+	email := otpscope.NormalizeEmail(req.Email)
+	if email == "" || strings.TrimSpace(req.Code) == "" {
+		return completedEmailSession{}, "invalid_request", nil
+	}
+	accountCandidate := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bananauth:email-account:"+requestUUID.String()))
+	verified, err := callIdentity[emailVerificationConsumeResult](h.identity, identityEmailVerificationConsumeEvent, map[string]any{
+		"request_id": "email-session:identity:" + requestUUID.String(),
+		"account_id": accountCandidate.String(),
+		"email":      email, "code": strings.ToUpper(req.Code), "now": time.Now().UTC().UnixMilli(),
+	})
+	if err != nil {
+		return completedEmailSession{}, "identity_unavailable", err
+	}
+	if !verified.OK || !verified.Value.Verified || verified.Value.AccountID == "" {
+		return completedEmailSession{}, "invalid_code", nil
+	}
+	accountID, err := uuid.Parse(verified.Value.AccountID)
+	if err != nil {
+		return completedEmailSession{}, "identity_unavailable", err
+	}
+	sessionID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bananauth:email-session:"+requestUUID.String())).String()
+	token, expires, expiresAt, err := h.sessions.CreateForRequest(accountID, "email-session:create:"+requestUUID.String(), sessionID)
+	if err != nil {
+		return completedEmailSession{}, "session_unavailable", err
+	}
+	return completedEmailSession{Token: token, ExpiresIn: expires, ExpiresAt: expiresAt, AccountID: accountID.String(), SessionID: sessionID}, "", nil
+}
+
+func (h *AuthHandler) completeEmailVerificationSessionComposed(c *pulpgin.Context) {
+	var req EmailVerificationSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, middleware.ErrorResponse{Error: "invalid_request"})
+		return
+	}
+	completed, code, err := h.completeEmailSession(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, middleware.ErrorResponse{Error: code})
+		return
+	}
+	if code != "" {
+		status := http.StatusBadRequest
+		if code == "identity_unavailable" || code == "session_unavailable" {
+			status = http.StatusBadGateway
+		}
+		c.JSON(status, middleware.ErrorResponse{Error: code})
+		return
+	}
+	c.JSON(http.StatusOK, StorefrontSessionResponse{
+		AccessToken: completed.Token, ExpiresIn: completed.ExpiresIn,
+		AccountID: completed.AccountID, SessionID: completed.SessionID,
+		ExpiresAt: completed.ExpiresAt,
+	})
+}
+
 func (h *AuthHandler) deleteAccountComposed(c *pulpgin.Context) {
 	var req DeleteAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

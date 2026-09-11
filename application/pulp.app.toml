@@ -13,4 +13,4 @@ cells = [
 [orchestrator]
 manifest = "lua-orchestrator.pulp.cell.toml"
 script = "bananauth.lua"
-sha256 = "ac1507fc3de66206dcd06d7fb2d301751ac428e350de7df871c762ec96cdfd05"
+sha256 = "9663a2649c841c1dd3d4c169f6509e44c565d040d14c45030ac5d7d16a3002fc"

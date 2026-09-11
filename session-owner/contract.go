@@ -3,9 +3,11 @@ package main
 const (
 	ContractVersion = "auth-session.v1"
 
-	FnCreate = "auth.session.v1.create"
-	FnGet    = "auth.session.v1.get"
-	FnRevoke = "auth.session.v1.revoke"
+	FnCreate      = "auth.session.v1.create"
+	FnCreateOwned = "auth.session.v1.create-owned"
+	FnGet         = "auth.session.v1.get"
+	FnRevoke      = "auth.session.v1.revoke"
+	FnRevokeOwned = "auth.session.v1.revoke-owned"
 )
 
 type Error struct {
@@ -37,6 +39,15 @@ type CreateRequest struct {
 	ExpiresAt int64  `msgpack:"expires_at"`
 }
 
+// CreateOwnedRequest lets the auth-session owner provide the authoritative
+// clock while preserving idempotency from a stable logical request.
+type CreateOwnedRequest struct {
+	RequestID      string `msgpack:"request_id"`
+	SessionID      string `msgpack:"session_id"`
+	AccountID      string `msgpack:"account_id"`
+	LifetimeMillis int64  `msgpack:"lifetime_millis"`
+}
+
 type GetRequest struct {
 	SessionID string `msgpack:"session_id"`
 	Now       int64  `msgpack:"now"`
@@ -46,6 +57,11 @@ type RevokeRequest struct {
 	RequestID string `msgpack:"request_id"`
 	SessionID string `msgpack:"session_id"`
 	RevokedAt int64  `msgpack:"revoked_at"`
+}
+
+type RevokeOwnedRequest struct {
+	RequestID string `msgpack:"request_id"`
+	SessionID string `msgpack:"session_id"`
 }
 
 func success[T any](value T) Result[T] {

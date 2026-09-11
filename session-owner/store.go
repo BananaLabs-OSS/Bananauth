@@ -12,8 +12,10 @@ import (
 
 type sessionStore interface {
 	Create(CreateRequest) (Session, error)
+	CreateOwned(CreateOwnedRequest, int64) (Session, error)
 	Get(string) (Session, bool, error)
 	Revoke(RevokeRequest) (Session, bool, error)
+	RevokeOwned(RevokeOwnedRequest, int64) (Session, bool, error)
 }
 
 type memoryStore struct {
@@ -66,6 +68,25 @@ func (s *memoryStore) Create(req CreateRequest) (Session, error) {
 	return value, nil
 }
 
+func (s *memoryStore) CreateOwned(req CreateOwnedRequest, now int64) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, logicalDigest := "create-owned:"+req.RequestID, createOwnedDigest(req)
+	if prior, ok := s.requests[key]; ok {
+		if prior.Digest != logicalDigest {
+			return Session{}, requestConflictError{operation: "create-owned"}
+		}
+		return prior.Session, nil
+	}
+	if _, exists := s.sessions[req.SessionID]; exists {
+		return Session{}, fmt.Errorf("session id already belongs to a different session")
+	}
+	value := Session{SessionID: req.SessionID, AccountID: req.AccountID, CreatedAt: now, ExpiresAt: now + req.LifetimeMillis, Active: true}
+	s.sessions[value.SessionID] = value
+	s.requests[key] = commandReceipt{Digest: logicalDigest, Session: value}
+	return value, nil
+}
+
 func (s *memoryStore) Get(id string) (Session, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,6 +115,29 @@ func (s *memoryStore) Revoke(req RevokeRequest) (Session, bool, error) {
 	value.Active = false
 	s.sessions[value.SessionID] = value
 	s.requests[key] = commandReceipt{Digest: digest, Session: value}
+	return value, true, nil
+}
+
+func (s *memoryStore) RevokeOwned(req RevokeOwnedRequest, now int64) (Session, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, logicalDigest := "revoke-owned:"+req.RequestID, revokeOwnedDigest(req)
+	if prior, ok := s.requests[key]; ok {
+		if prior.Digest != logicalDigest {
+			return Session{}, false, requestConflictError{operation: "revoke-owned"}
+		}
+		return prior.Session, true, nil
+	}
+	value, ok := s.sessions[req.SessionID]
+	if !ok {
+		return Session{}, false, nil
+	}
+	if value.RevokedAt != 0 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke-owned"}
+	}
+	value.RevokedAt, value.Active = now, false
+	s.sessions[value.SessionID] = value
+	s.requests[key] = commandReceipt{Digest: logicalDigest, Session: value}
 	return value, true, nil
 }
 
@@ -196,6 +240,40 @@ func (s *sqliteStore) Create(req CreateRequest) (Session, error) {
 	return value, nil
 }
 
+func (s *sqliteStore) CreateOwned(req CreateOwnedRequest, now int64) (Session, error) {
+	digest := createOwnedDigest(req)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Session{}, err
+	}
+	defer tx.Rollback()
+	if prior, ok, err := byRequest(tx, "create-owned", req.RequestID, digest); err != nil {
+		return Session{}, err
+	} else if ok {
+		return prior, nil
+	}
+	value := Session{SessionID: req.SessionID, AccountID: req.AccountID, CreatedAt: now, ExpiresAt: now + req.LifetimeMillis, Active: true}
+	result, err := tx.Exec(`INSERT INTO auth_sessions(session_id, account_id, created_at, expires_at, revoked_at, version)
+		VALUES (?, ?, ?, ?, 0, 1) ON CONFLICT(session_id) DO NOTHING`, value.SessionID, value.AccountID, value.CreatedAt, value.ExpiresAt)
+	if err != nil {
+		return Session{}, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return Session{}, err
+	}
+	if inserted != 1 {
+		return Session{}, fmt.Errorf("session id already belongs to a different session")
+	}
+	if err = insertCommand(tx, "create-owned", req.RequestID, digest, value); err != nil {
+		return Session{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Session{}, err
+	}
+	return value, nil
+}
+
 func (s *sqliteStore) Get(id string) (Session, bool, error) {
 	value, _, ok, err := getSession(s.db, id)
 	return value, ok, err
@@ -234,6 +312,46 @@ func (s *sqliteStore) Revoke(req RevokeRequest) (Session, bool, error) {
 	value.RevokedAt = req.RevokedAt
 	value.Active = false
 	if err = insertCommand(tx, "revoke", req.RequestID, digest, value); err != nil {
+		return Session{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Session{}, false, err
+	}
+	return value, true, nil
+}
+
+func (s *sqliteStore) RevokeOwned(req RevokeOwnedRequest, now int64) (Session, bool, error) {
+	digest := revokeOwnedDigest(req)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Session{}, false, err
+	}
+	defer tx.Rollback()
+	if prior, ok, err := byRequest(tx, "revoke-owned", req.RequestID, digest); err != nil {
+		return Session{}, false, err
+	} else if ok {
+		return prior, true, nil
+	}
+	value, version, ok, err := getSession(tx, req.SessionID)
+	if err != nil || !ok {
+		return value, ok, err
+	}
+	if value.RevokedAt != 0 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke-owned"}
+	}
+	result, err := tx.Exec(`UPDATE auth_sessions SET revoked_at=?, version=version+1 WHERE session_id=? AND revoked_at=0 AND version=?`, now, req.SessionID, version)
+	if err != nil {
+		return Session{}, false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Session{}, false, err
+	}
+	if changed != 1 {
+		return Session{}, false, sessionMutationConflictError{operation: "revoke-owned"}
+	}
+	value.RevokedAt, value.Active = now, false
+	if err = insertCommand(tx, "revoke-owned", req.RequestID, digest, value); err != nil {
 		return Session{}, false, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -310,9 +428,15 @@ func createDigest(req CreateRequest) string {
 	return digest(fmt.Sprintf("%s\x00%s\x00%d\x00%d", req.SessionID, req.AccountID, req.CreatedAt, req.ExpiresAt))
 }
 
+func createOwnedDigest(req CreateOwnedRequest) string {
+	return digest(fmt.Sprintf("%s\x00%s\x00%d", req.SessionID, req.AccountID, req.LifetimeMillis))
+}
+
 func revokeDigest(req RevokeRequest) string {
 	return digest(fmt.Sprintf("%s\x00%d", req.SessionID, req.RevokedAt))
 }
+
+func revokeOwnedDigest(req RevokeOwnedRequest) string { return digest(req.SessionID) }
 
 func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))

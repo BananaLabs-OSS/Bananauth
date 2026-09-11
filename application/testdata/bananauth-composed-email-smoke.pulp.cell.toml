@@ -1,6 +1,6 @@
 # Test-only counterpart to the composed deployment manifest.
 name = "bananauth-http"
-version = "0.1.0"
+version = "0.2.0"
 wasm = "../../pulp-cell/bananauth.wasm"
 
 consumes = ["orchestrator.dispatch"]

@@ -11,12 +11,16 @@ import (
 )
 
 type fakeSessionDispatcher struct {
-	active map[string]bool
-	events []string
+	active    map[string]bool
+	events    []string
+	failEvent string
 }
 
 func (f *fakeSessionDispatcher) Dispatch(request workflow.DispatchRequest) (workflow.DispatchResult, error) {
 	f.events = append(f.events, request.Event)
+	if request.Event == f.failEvent {
+		return workflow.DispatchResult{}, fmt.Errorf("owner unavailable")
+	}
 	payload, ok := request.Payload.(map[string]any)
 	if !ok {
 		return workflow.DispatchResult{}, fmt.Errorf("invalid payload")
@@ -30,6 +34,9 @@ func (f *fakeSessionDispatcher) Dispatch(request workflow.DispatchRequest) (work
 		return workflow.DispatchResult{}, err
 	}
 	id, _ := input["session_id"].(string)
+	accountID, _ := input["account_id"].(string)
+	createdAt, _ := input["created_at"].(int64)
+	expiresAt, _ := input["expires_at"].(int64)
 	switch request.Event {
 	case sessionCreatedEvent:
 		f.active[id] = true
@@ -42,12 +49,24 @@ func (f *fakeSessionDispatcher) Dispatch(request workflow.DispatchRequest) (work
 	response, err := msgpack.Marshal(sessionWorkflowResult{
 		Version: "auth-session.v1",
 		OK:      true,
-		Value:   sessionWorkflowSession{SessionID: id, Active: f.active[id]},
+		Value: sessionWorkflowSession{SessionID: id, AccountID: accountID,
+			CreatedAt: createdAt, ExpiresAt: expiresAt, Active: f.active[id]},
 	})
 	if err != nil {
 		return workflow.DispatchResult{}, err
 	}
 	return workflow.DispatchResult{Value: response}, nil
+}
+
+func TestComposedSessionCheckPreservesOwnerUncertainty(t *testing.T) {
+	dispatcher := &fakeSessionDispatcher{active: map[string]bool{}, failEvent: sessionVerifiedEvent}
+	manager := NewComposedSessionManager("test-secret-with-enough-entropy", time.Hour, dispatcher)
+	if active, err := manager.Check("session"); err == nil || active {
+		t.Fatalf("check = %v, %v", active, err)
+	}
+	if manager.Exists("session") {
+		t.Fatal("compatibility Exists accepted uncertain owner")
+	}
 }
 
 func TestComposedSessionManagerUsesLuaWorkflowBoundary(t *testing.T) {

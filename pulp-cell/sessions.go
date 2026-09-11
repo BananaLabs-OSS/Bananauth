@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	sessionCreatedEvent  = "bananauth.session.created.v1"
-	sessionVerifiedEvent = "bananauth.session.verified.v1"
-	sessionRevokedEvent  = "bananauth.session.revoked.v1"
+	sessionCreatedEvent      = "bananauth.session.created.v1"
+	sessionCreatedOwnedEvent = "bananauth.session.created-owned.v1"
+	sessionVerifiedEvent     = "bananauth.session.verified.v1"
+	sessionRevokedEvent      = "bananauth.session.revoked.v1"
+	sessionRevokedOwnedEvent = "bananauth.session.revoked-owned.v1"
 )
 
 type sessionEntry struct {
@@ -88,53 +90,113 @@ func (m *SessionManager) Verify(token string) (accountID, sessionID string, err 
 }
 
 func (m *SessionManager) Exists(sessionID string) bool {
+	active, err := m.Check(sessionID)
+	return err == nil && active
+}
+
+// Check preserves owner uncertainty so authentication middleware can return a
+// retryable service error rather than falsely claiming a session was revoked.
+func (m *SessionManager) Check(sessionID string) (bool, error) {
 	if m.dispatch != nil {
 		var result sessionWorkflowResult
 		if err := m.call(sessionVerifiedEvent, map[string]any{
 			"session_id": sessionID,
 			"now":        time.Now().UTC().UnixMilli(),
 		}, &result); err != nil {
-			return false
+			return false, err
 		}
-		return result.OK && result.Value.Active
+		if !result.OK {
+			return false, nil
+		}
+		if result.Value.SessionID != sessionID {
+			return false, fmt.Errorf("session owner returned mismatched fact")
+		}
+		return result.Value.Active, nil
 	}
 	m.mu.RLock()
 	_, exists := m.sessions[sessionID]
 	m.mu.RUnlock()
-	return exists
+	return exists, nil
 }
 
 func (m *SessionManager) Create(accountID uuid.UUID) (string, int, error) {
+	now := time.Now().UTC()
 	sessionID := m.newSessionID()
+	return m.createAt(accountID, "session:create:"+sessionID, sessionID, now)
+}
+
+// CreateForRequest creates exactly one durable session for a stable BFF login
+// attempt. The identifiers and timestamps are replayed unchanged, so a retry
+// after OTP consumption, owner commit, or response loss resumes rather than
+// creating a second session.
+func (m *SessionManager) CreateForRequest(accountID uuid.UUID, requestID, sessionID string) (string, int, int64, error) {
+	if requestID == "" || sessionID == "" {
+		return "", 0, 0, fmt.Errorf("stable session request is incomplete")
+	}
+	if m.dispatch == nil {
+		return "", 0, 0, fmt.Errorf("stable session requests require the durable session owner")
+	}
+	var result sessionWorkflowResult
+	if err := m.call(sessionCreatedOwnedEvent, map[string]any{
+		"request_id": requestID, "session_id": sessionID, "account_id": accountID.String(),
+		"lifetime_millis": m.expiry.Milliseconds(),
+	}, &result); err != nil {
+		return "", 0, 0, fmt.Errorf("persist session: %w", err)
+	}
+	if !result.OK || !result.Value.Active || result.Value.SessionID != sessionID || result.Value.AccountID != accountID.String() || result.Value.ExpiresAt <= result.Value.CreatedAt || result.Value.RevokedAt != 0 {
+		return "", 0, 0, fmt.Errorf("persist session: owner returned an invalid receipt")
+	}
+	expiresAt := time.UnixMilli(result.Value.ExpiresAt).UTC()
 	var signed string
 	var err error
 	if m.hostJWT {
-		signed, err = hostjwt.Sign(hostjwt.SignRequest{AccountID: accountID.String(), SessionID: sessionID, ExpiresAt: time.Now().UTC().Add(m.expiry).UnixMilli()})
+		signed, err = hostjwt.Sign(hostjwt.SignRequest{AccountID: accountID.String(), SessionID: sessionID, ExpiresAt: result.Value.ExpiresAt})
 	} else {
-		signed, err = authcrypto.MintJWT(m.jwtSecret, accountID, sessionID, m.expiry)
+		signed, err = authcrypto.MintJWTUntil(m.jwtSecret, accountID, sessionID, expiresAt)
 	}
 	if err != nil {
-		return "", 0, fmt.Errorf("sign token: %w", err)
+		return "", 0, 0, fmt.Errorf("sign token: %w", err)
 	}
-	now := time.Now().UTC()
+	seconds := int(time.Until(expiresAt).Seconds())
+	if seconds <= 0 {
+		return "", 0, 0, fmt.Errorf("persist session: owner receipt already expired")
+	}
+	return signed, seconds, result.Value.ExpiresAt, nil
+}
+
+func (m *SessionManager) createAt(accountID uuid.UUID, requestID, sessionID string, now time.Time) (string, int, error) {
+	expiresAt := now.Add(m.expiry)
 	if m.dispatch != nil {
 		var result sessionWorkflowResult
 		if err := m.call(sessionCreatedEvent, map[string]any{
-			"request_id": "session:create:" + sessionID,
+			"request_id": requestID,
 			"session_id": sessionID,
 			"account_id": accountID.String(),
 			"created_at": now.UnixMilli(),
-			"expires_at": now.Add(m.expiry).UnixMilli(),
+			"expires_at": expiresAt.UnixMilli(),
 		}, &result); err != nil {
 			return "", 0, fmt.Errorf("persist session: %w", err)
 		}
 		if !result.OK || !result.Value.Active {
 			return "", 0, fmt.Errorf("persist session: owner rejected session")
 		}
+		if result.Value.SessionID != sessionID || result.Value.AccountID != accountID.String() || result.Value.CreatedAt != now.UnixMilli() || result.Value.ExpiresAt != expiresAt.UnixMilli() || result.Value.RevokedAt != 0 {
+			return "", 0, fmt.Errorf("persist session: owner returned a mismatched receipt")
+		}
 	} else {
 		m.mu.Lock()
 		m.sessions[sessionID] = sessionEntry{AccountID: accountID.String(), CreatedAt: now}
 		m.mu.Unlock()
+	}
+	var signed string
+	var err error
+	if m.hostJWT {
+		signed, err = hostjwt.Sign(hostjwt.SignRequest{AccountID: accountID.String(), SessionID: sessionID, ExpiresAt: expiresAt.UnixMilli()})
+	} else {
+		signed, err = authcrypto.MintJWTUntil(m.jwtSecret, accountID, sessionID, expiresAt)
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("sign token: %w", err)
 	}
 	return signed, int(m.expiry.Seconds()), nil
 }
@@ -152,6 +214,28 @@ func (m *SessionManager) Revoke(sessionID string) {
 	m.mu.Lock()
 	delete(m.sessions, sessionID)
 	m.mu.Unlock()
+}
+
+func (m *SessionManager) RevokeChecked(sessionID string) error {
+	if m.dispatch == nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if _, exists := m.sessions[sessionID]; !exists {
+			return fmt.Errorf("session not found")
+		}
+		delete(m.sessions, sessionID)
+		return nil
+	}
+	var result sessionWorkflowResult
+	if err := m.call(sessionRevokedOwnedEvent, map[string]any{
+		"request_id": "session:logout:" + sessionID, "session_id": sessionID,
+	}, &result); err != nil {
+		return fmt.Errorf("revoke session: %w", err)
+	}
+	if !result.OK || result.Value.SessionID != sessionID || result.Value.Active || result.Value.RevokedAt <= 0 {
+		return fmt.Errorf("revoke session: owner rejected revocation")
+	}
+	return nil
 }
 
 type sessionWorkflowResult struct {

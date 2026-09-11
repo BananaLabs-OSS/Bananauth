@@ -118,6 +118,17 @@ type EmailVerificationConsumeRequest struct {
 	Code  string `json:"code" binding:"required"`
 }
 
+// EmailVerificationSessionRequest is a host-to-host passwordless login
+// completion. RequestID and IssuedAt are generated once by the storefront BFF
+// and retained in its server-side session. They are deliberately not accepted
+// from browser identity claims: the OTP remains the human proof, while the
+// stable request makes owner receipts replayable after a lost response.
+type EmailVerificationSessionRequest struct {
+	Email     string `json:"email" binding:"required,email"`
+	Code      string `json:"code" binding:"required"`
+	RequestID string `json:"request_id" binding:"required"`
+}
+
 type DeleteAccountRequest struct {
 	Password string `json:"password"`
 	Email    string `json:"email"`
@@ -135,4 +146,12 @@ type TokenResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
 	AccountID   string `json:"account_id"`
+}
+
+type StorefrontSessionResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	AccountID   string `json:"account_id"`
+	SessionID   string `json:"session_id"`
+	ExpiresAt   int64  `json:"expires_at"`
 }

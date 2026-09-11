@@ -3,20 +3,81 @@ package main
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-type owner struct{ store sessionStore }
+type owner struct {
+	store sessionStore
+	now   func() time.Time
+}
 
-func newOwner(store sessionStore) *owner { return &owner{store: store} }
+func newOwner(store sessionStore) *owner { return &owner{store: store, now: time.Now} }
 
 func (o *owner) providers() map[string]func([]byte) ([]byte, error) {
 	return map[string]func([]byte) ([]byte, error){
-		FnCreate: o.create,
-		FnGet:    o.get,
-		FnRevoke: o.revoke,
+		FnCreate:      o.create,
+		FnCreateOwned: o.createOwned,
+		FnGet:         o.get,
+		FnRevoke:      o.revoke,
+		FnRevokeOwned: o.revokeOwned,
 	}
+}
+
+func (o *owner) revokeOwned(raw []byte) ([]byte, error) {
+	var req RevokeOwnedRequest
+	if err := decode(raw, &req); err != nil {
+		return nil, err
+	}
+	if blank(req.RequestID) || blank(req.SessionID) {
+		return encode(failure[Session]("invalid_request", "request_id and session_id are required"))
+	}
+	now := o.now().UTC().UnixMilli()
+	if now <= 0 {
+		return encode(failure[Session]("clock_unavailable", "owner clock is unavailable"))
+	}
+	value, ok, err := o.store.RevokeOwned(req, now)
+	if err != nil {
+		var conflict requestConflictError
+		if errors.As(err, &conflict) {
+			return encode(failure[Session]("idempotency_conflict", conflict.Error()))
+		}
+		var competing sessionMutationConflictError
+		if errors.As(err, &competing) {
+			return encode(failure[Session]("mutation_conflict", competing.Error()))
+		}
+		return nil, fmt.Errorf("revoke owner-clock auth session: %w", err)
+	}
+	if !ok {
+		return encode(failure[Session]("not_found", "session not found"))
+	}
+	value.Active = false
+	return encode(success(value))
+}
+
+func (o *owner) createOwned(raw []byte) ([]byte, error) {
+	var req CreateOwnedRequest
+	if err := decode(raw, &req); err != nil {
+		return nil, err
+	}
+	if blank(req.RequestID) || blank(req.SessionID) || blank(req.AccountID) || req.LifetimeMillis <= 0 || req.LifetimeMillis > int64((30*24*time.Hour)/time.Millisecond) {
+		return encode(failure[Session]("invalid_request", "request_id, session_id, account_id, and a bounded lifetime are required"))
+	}
+	now := o.now().UTC().UnixMilli()
+	if now <= 0 {
+		return encode(failure[Session]("clock_unavailable", "owner clock is unavailable"))
+	}
+	value, err := o.store.CreateOwned(req, now)
+	if err != nil {
+		var conflict requestConflictError
+		if errors.As(err, &conflict) {
+			return encode(failure[Session]("idempotency_conflict", conflict.Error()))
+		}
+		return nil, fmt.Errorf("create owner-clock auth session: %w", err)
+	}
+	value.Active = value.RevokedAt == 0 && value.ExpiresAt > now
+	return encode(success(value))
 }
 
 func (o *owner) create(raw []byte) ([]byte, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -21,6 +22,54 @@ func call[T any](t *testing.T, provider func([]byte) ([]byte, error), request an
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestOwnerClockCreateReplaysExactReceipt(t *testing.T) {
+	clock := time.UnixMilli(1_800_000_000_000)
+	cell := newOwner(newMemoryStore())
+	cell.now = func() time.Time { return clock }
+	request := CreateOwnedRequest{RequestID: "login-1", SessionID: "session-1", AccountID: "account-1", LifetimeMillis: 60_000}
+	first := call[Session](t, cell.createOwned, request)
+	if !first.OK || first.Value.CreatedAt != clock.UnixMilli() || first.Value.ExpiresAt != clock.Add(time.Minute).UnixMilli() {
+		t.Fatalf("first = %#v", first)
+	}
+	clock = clock.Add(10 * time.Second)
+	replay := call[Session](t, cell.createOwned, request)
+	if !replay.OK || replay.Value != first.Value {
+		t.Fatalf("replay = %#v, want %#v", replay, first)
+	}
+	changed := request
+	changed.AccountID = "attacker"
+	conflict := call[Session](t, cell.createOwned, changed)
+	if conflict.OK || conflict.Error == nil || conflict.Error.Code != "idempotency_conflict" {
+		t.Fatalf("changed request = %#v", conflict)
+	}
+}
+
+func TestOwnerClockRevokeReplaysExactReceipt(t *testing.T) {
+	clock := time.UnixMilli(1_800_000_000_000)
+	cell := newOwner(newMemoryStore())
+	cell.now = func() time.Time { return clock }
+	created := call[Session](t, cell.createOwned, CreateOwnedRequest{RequestID: "create", SessionID: "session", AccountID: "account", LifetimeMillis: 60_000})
+	if !created.OK {
+		t.Fatalf("create = %#v", created)
+	}
+	request := RevokeOwnedRequest{RequestID: "logout", SessionID: "session"}
+	first := call[Session](t, cell.revokeOwned, request)
+	if !first.OK || first.Value.RevokedAt != clock.UnixMilli() || first.Value.Active {
+		t.Fatalf("revoke = %#v", first)
+	}
+	clock = clock.Add(time.Second)
+	replay := call[Session](t, cell.revokeOwned, request)
+	if !replay.OK || replay.Value != first.Value {
+		t.Fatalf("replay = %#v", replay)
+	}
+	changed := request
+	changed.SessionID = "other"
+	conflict := call[Session](t, cell.revokeOwned, changed)
+	if conflict.OK || conflict.Error == nil || conflict.Error.Code != "idempotency_conflict" {
+		t.Fatalf("changed = %#v", conflict)
+	}
 }
 
 func TestOwnerSessionLifecycleIsIdempotentAndExpiryAware(t *testing.T) {

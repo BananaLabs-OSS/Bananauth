@@ -52,10 +52,17 @@ func GenerateState() (string, error) {
 // session_id claims so consumers can check session revocation after
 // signature verification.
 func MintJWT(secret []byte, accountID uuid.UUID, sessionID string, expiry time.Duration) (string, error) {
+	return MintJWTUntil(secret, accountID, sessionID, time.Now().UTC().Add(expiry))
+}
+
+// MintJWTUntil signs against the durable session owner's exact expiry. This
+// prevents a replayed HTTP completion from extending credential validity past
+// its persisted session fact.
+func MintJWTUntil(secret []byte, accountID uuid.UUID, sessionID string, expiresAt time.Time) (string, error) {
 	now := time.Now().UTC()
 	claims := authClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(now.Add(expiry)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt.UTC()),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ID:        sessionID,
 		},

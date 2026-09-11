@@ -28,7 +28,12 @@ func sessionAuth(sm *SessionManager) pulpgin.HandlerFunc {
 			return
 		}
 
-		if !sm.Exists(sessionID) {
+		active, checkErr := sm.Check(sessionID)
+		if checkErr != nil {
+			c.AbortWithStatusJSON(503, pulpgin.H{"error": "session service unavailable"})
+			return
+		}
+		if !active {
 			c.AbortWithStatusJSON(401, pulpgin.H{"error": "session revoked"})
 			return
 		}
