@@ -49,7 +49,7 @@ func (s *sqliteEventStore) Migrate(ctx context.Context) error {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO auth_identity_head(singleton,revision)
-		SELECT 1,COALESCE(MAX(revision),0) FROM auth_identity_commands WHERE true
+		SELECT 1,COALESCE(MAX(revision),0) FROM auth_identity_commands WHERE 1=1
 		ON CONFLICT(singleton) DO NOTHING`); err != nil {
 		return err
 	}
