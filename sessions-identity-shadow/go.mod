@@ -1,6 +1,6 @@
 module github.com/bananalabs-oss/bananauth/sessions-identity-shadow
 
-go 1.25.6
+go 1.25.13
 
 require (
 	github.com/SirNiklas9/pulp-engines/identity-core v0.0.0

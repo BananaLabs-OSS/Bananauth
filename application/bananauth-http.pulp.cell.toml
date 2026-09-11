@@ -1,7 +1,7 @@
 name = "bananauth"
 version = "0.2.0"
 wasm = "../pulp-cell/bananauth.wasm"
-wasm_sha256 = "d55ed4d34e0d0a8fdab5430494bfe326923d7f779687d25f54cc8c6feba79f3f"
+wasm_sha256 = "828fabdb77db06b73a5bba3925a8e4c3161f3903792339e32b5d13af1bf21bd3"
 
 consumes = ["orchestrator.dispatch"]
 depends_on = ["bananauth-lua"]

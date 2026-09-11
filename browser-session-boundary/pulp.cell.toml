@@ -1,7 +1,7 @@
 name = "auth-browser-session"
 version = "0.1.0"
 wasm = "auth-browser-session.wasm"
-wasm_sha256 = "6ef26f1bb9fd6013b2aa24107112eb7728921c11cbc2982c7362130785efcd91"
+wasm_sha256 = "a22bab5b9f4a02bcf62a5a7fa4a5ea3f488400dc1c48e5728fac5981752747f7"
 
 provides = ["auth.browser-session.v1.resolve"]
 consumes = ["auth.session.v1.get"]

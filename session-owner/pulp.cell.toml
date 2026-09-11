@@ -1,7 +1,7 @@
 name = "auth-session"
 version = "0.2.0"
 wasm = "auth-session.wasm"
-wasm_sha256 = "09ac54c695be8de8604ec935f649ed6cf663734e35917fee353d79b8ea910b1a"
+wasm_sha256 = "68f304e6d60c35038e6ad035ef046e682d21945f9c7ddad371b785d00dedca5c"
 
 provides = [
   "auth.session.v1.create",
