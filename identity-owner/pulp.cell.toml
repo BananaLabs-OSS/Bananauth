@@ -1,7 +1,7 @@
 name = "auth-identity"
 version = "0.1.0"
 wasm = "auth-identity.wasm"
-wasm_sha256 = "e46710c436022a5d05cd945d22655db4992508840733535d6b64268ac8662420"
+wasm_sha256 = "99cf976b7257c1c898c665ba7df8118cfd7234c9fd823c83ed85b9052fa8117d"
 
 provides = [
   "auth.identity.v1.native.register",
