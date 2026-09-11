@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/BananaLabs-OSS/Fiber v0.0.0
+	github.com/BananaLabs-OSS/Pulp-ext-postgres/sqlitecompat v0.0.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	modernc.org/sqlite v1.48.2
 )
@@ -11,6 +12,7 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -22,3 +24,5 @@ require (
 )
 
 replace github.com/BananaLabs-OSS/Fiber => ../../Fiber
+
+replace github.com/BananaLabs-OSS/Pulp-ext-postgres/sqlitecompat => ../../Pulp-ext-postgres/sqlitecompat
