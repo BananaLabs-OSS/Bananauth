@@ -59,22 +59,34 @@ func (s *sqliteEventStore) Migrate(ctx context.Context) error {
 }
 
 func (s *sqliteEventStore) Load(ctx context.Context) (snapshot, map[string]commandReceipt, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT operation, request_id, request_digest, response, snapshot
+	current := newSnapshot()
+	var rawSnapshot []byte
+	err := s.db.QueryRowContext(ctx, `SELECT snapshot FROM auth_identity_commands ORDER BY revision DESC LIMIT 1`).Scan(&rawSnapshot)
+	if err != nil && err != sql.ErrNoRows {
+		return snapshot{}, nil, err
+	}
+	if err == nil {
+		if err := msgpack.Unmarshal(rawSnapshot, &current); err != nil {
+			return snapshot{}, nil, fmt.Errorf("decode identity snapshot: %w", err)
+		}
+	}
+
+	// Every journal row contains a complete snapshot. Fetching all of those
+	// snapshots through the WASM database ABI grows quadratically with identity
+	// history and can exhaust guest memory during startup. Only the newest
+	// snapshot is state; older rows contribute idempotency receipts alone.
+	rows, err := s.db.QueryContext(ctx, `SELECT operation, request_id, request_digest, response
 		FROM auth_identity_commands ORDER BY revision ASC`)
 	if err != nil {
 		return snapshot{}, nil, err
 	}
 	defer rows.Close()
-	current := newSnapshot()
 	receipts := map[string]commandReceipt{}
 	for rows.Next() {
 		var operation, requestID, digest string
-		var response, rawSnapshot []byte
-		if err := rows.Scan(&operation, &requestID, &digest, &response, &rawSnapshot); err != nil {
+		var response []byte
+		if err := rows.Scan(&operation, &requestID, &digest, &response); err != nil {
 			return snapshot{}, nil, err
-		}
-		if err := msgpack.Unmarshal(rawSnapshot, &current); err != nil {
-			return snapshot{}, nil, fmt.Errorf("decode identity snapshot: %w", err)
 		}
 		receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
 		receipts[operation+":"+requestID] = receipt
