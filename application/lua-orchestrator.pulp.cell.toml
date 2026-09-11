@@ -1,7 +1,7 @@
 name = "bananauth-lua"
-version = "0.1.0"
+version = "0.1.1"
 wasm = "../../Pulp-Lua/pulp-cell/lua-orchestrator.wasm"
-wasm_sha256 = "0fbc36dd56ec2895e4d1f58d4a8a446c52c8df82315f933b09931efd4bf2fd4c"
+wasm_sha256 = "cbee390eeaf14dfc5123820ea29dd272e73e226ee53fc8c604c7528de9d0d377"
 
 provides = [
   "orchestrator.dispatch",
