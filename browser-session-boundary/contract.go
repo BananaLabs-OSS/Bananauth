@@ -1,13 +1,32 @@
 package main
 
 const (
-	ProviderResolve = "auth.browser-session.v1.resolve"
-	ContractVersion = "auth.browser-session.v1"
-	AccountAudience = "account"
+	ProviderResolve                   = "auth.browser-session.v1.resolve"
+	ProviderCompleteEmailVerification = "auth.browser-session.v1.complete-email-verification"
+	ContractVersion                   = "auth.browser-session.v1"
+	AccountAudience                   = "account"
 
 	maxCredentialBytes = 4096
 	maxOpaqueIDBytes   = 128
 )
+
+type CompleteEmailVerificationRequest struct {
+	Version   string `msgpack:"version"`
+	RequestID string `msgpack:"request_id"`
+	Email     string `msgpack:"email"`
+	Code      string `msgpack:"code"`
+}
+
+type CompleteEmailVerificationResult struct {
+	Version            string `msgpack:"version"`
+	OK                 bool   `msgpack:"ok"`
+	AccessToken        string `msgpack:"access_token,omitempty"`
+	AccountID          string `msgpack:"account_id,omitempty"`
+	SessionID          string `msgpack:"session_id,omitempty"`
+	ExpiresIn          int64  `msgpack:"expires_in,omitempty"`
+	ExpiresAtUnixMilli int64  `msgpack:"expires_at_unix_milli,omitempty"`
+	Error              string `msgpack:"error,omitempty"`
+}
 
 type ResolveRequest struct {
 	Version    string `msgpack:"version"`

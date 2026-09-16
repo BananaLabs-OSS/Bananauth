@@ -32,7 +32,14 @@ func init() {
 			},
 			now: time.Now,
 		}
+		completion := emailSessionCompleter{
+			consume: func(wire []byte) ([]byte, error) { return pulp.Call("auth-identity", identityConsumeProvider, wire) },
+			create:  func(wire []byte) ([]byte, error) { return pulp.Call("auth-session", sessionCreateProvider, wire) },
+			sign:    hostjwt.Sign,
+			now:     time.Now,
+		}
 		pulp.Provide(ProviderResolve, boundary.resolve)
+		pulp.Provide(ProviderCompleteEmailVerification, completion.complete)
 		return nil
 	})
 }
