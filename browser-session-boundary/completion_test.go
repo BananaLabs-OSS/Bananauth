@@ -1,0 +1,63 @@
+package main
+
+import (
+	"testing"
+	"time"
+
+	hostjwt "github.com/BananaLabs-OSS/Fiber/pulp/jwt"
+	"github.com/vmihailenco/msgpack/v5"
+)
+
+func TestCompleteEmailVerificationCreatesOwnedSignedSession(t *testing.T) {
+	now := time.UnixMilli(1_800_000_000_000).UTC()
+	var consumed, created map[string]any
+	boundary := emailSessionCompleter{
+		now: func() time.Time { return now },
+		consume: func(wire []byte) ([]byte, error) {
+			if err := msgpack.Unmarshal(wire, &consumed); err != nil {
+				t.Fatal(err)
+			}
+			return msgpack.Marshal(map[string]any{"version": identityVersion, "ok": true, "value": map[string]any{"verified": true, "account_id": "account-1"}})
+		},
+		create: func(wire []byte) ([]byte, error) {
+			if err := msgpack.Unmarshal(wire, &created); err != nil {
+				t.Fatal(err)
+			}
+			return msgpack.Marshal(map[string]any{"version": sessionContractVersion, "ok": true, "value": map[string]any{
+				"session_id": created["session_id"], "account_id": "account-1", "expires_at": now.Add(24 * time.Hour).UnixMilli(), "active": true,
+			}})
+		},
+		sign: func(request hostjwt.SignRequest) (string, error) {
+			if request.AccountID != "account-1" || request.SessionID != created["session_id"] || request.ExpiresAt != now.Add(24*time.Hour).UnixMilli() {
+				t.Fatalf("unexpected sign request: %+v", request)
+			}
+			return "signed-token", nil
+		},
+	}
+	wire, _ := msgpack.Marshal(CompleteEmailVerificationRequest{Version: ContractVersion, RequestID: "123e4567-e89b-12d3-a456-426614174000", Email: " Player@Example.com ", Code: "123456"})
+	result := boundary.completeValue(wire)
+	if !result.OK || result.AccessToken != "signed-token" || result.AccountID != "account-1" || result.ExpiresIn != 86400 {
+		t.Fatalf("unexpected completion result: %+v", result)
+	}
+	if consumed["email"] != "player@example.com" || consumed["code"] != "123456" {
+		t.Fatalf("unexpected consume request: %#v", consumed)
+	}
+	if created["request_id"] != "email-session:create:123e4567-e89b-12d3-a456-426614174000" {
+		t.Fatalf("session create is not replay-stable: %#v", created)
+	}
+}
+
+func TestCompleteEmailVerificationRejectsMalformedInputBeforeOwnerCalls(t *testing.T) {
+	called := false
+	boundary := emailSessionCompleter{
+		now:     time.Now,
+		consume: func([]byte) ([]byte, error) { called = true; return nil, nil },
+		create:  func([]byte) ([]byte, error) { called = true; return nil, nil },
+		sign:    func(hostjwt.SignRequest) (string, error) { called = true; return "", nil },
+	}
+	wire, _ := msgpack.Marshal(CompleteEmailVerificationRequest{Version: ContractVersion, RequestID: "not a request id", Email: "x", Code: "1"})
+	result := boundary.completeValue(wire)
+	if result.OK || result.Error != "invalid_request" || called {
+		t.Fatalf("malformed request crossed owner boundary: %+v called=%v", result, called)
+	}
+}
