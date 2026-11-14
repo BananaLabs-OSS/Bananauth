@@ -192,3 +192,35 @@ GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o bananauth.wasm .
 ## License
 
 MIT
+
+## Standalone Go candidate
+
+Build the candidate with `go build -o bananauth ./cmd/server` or use
+`Dockerfile.native` for port 3000. Set `BANANAUTH_IDENTITY_DB` and
+`BANANAUTH_SESSION_DB` to the corresponding SQLite files or PostgreSQL
+connection URLs. For PostgreSQL, preserve the schema selection used by each
+owner in its connection URL. For SQLite, rehearse against consistent copies
+of the two existing owner files before opening deployed data.
+
+Keep the current `JWT_SECRET` and OTP keyring for a handoff so existing
+session tokens and encrypted delivery intents can still be read. The native
+service reads `BANANAUTH_OTP_KEY_CURRENT` and `BANANAUTH_OTP_KEY_PREVIOUS`
+and accepts the existing `BANANAAUTH_OTP_KEY_CURRENT` and
+`BANANAAUTH_OTP_KEY_PREVIOUS` aliases. The Discord settings also accept
+the previous `PULP_OAUTH_DISCORD_*` names. Configure `LISTEN_ADDR` when
+running the binary directly to select the listener.
+
+For a Sessions handoff, set `BANANAUTH_VERIFICATION_REPLAY_KEY` to the
+legacy backend's verification request key (its internal service secret).
+This allows an unexpired V2 consume receipt written before the handoff to
+replay on native Bananauth. Fresh installations default to the signing key.
+
+Exercise registration, profile reads, session validation after restart,
+logout, and email and Discord flows against the candidate. Keep
+`OUTBOUND_DELIVERY_ENABLED` off in a rehearsal using copied data, and
+enable delivery on the replacement only after stopping the previous worker.
+To restrict verification mail to test inboxes, set
+`SESSIONS_TRANSACTIONAL_TEST_RECIPIENTS` to a comma-separated list of bare
+addresses. Set `SESSIONS_TRANSACTIONAL_TEST_RECIPIENTS_REQUIRED=true` to
+require the list whenever outbound delivery is enabled. Mail for other
+recipients stays in the outbox until it expires or the restriction changes.
