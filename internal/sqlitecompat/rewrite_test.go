@@ -1,0 +1,132 @@
+package sqlitecompat
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestRewriteSQLiteSQL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		args int
+		want string
+	}{
+		{
+			name: "sqlite boolean storage",
+			in:   `CREATE TABLE flags (enabled BOOLEAN NOT NULL DEFAULT FALSE, payload BLOB)`,
+			args: 0,
+			want: `CREATE TABLE flags (enabled BIGINT NOT NULL DEFAULT 0, payload BYTEA)`,
+		},
+		{
+			name: "sqlite boolean predicate",
+			in:   `SELECT id FROM flags WHERE enabled=TRUE`,
+			args: 0,
+			want: `SELECT id FROM flags WHERE enabled=1`,
+		},
+		{
+			name: "bare boolean predicate remains postgres boolean",
+			in:   `SELECT 1 FROM flags WHERE TRUE`,
+			args: 0,
+			want: `SELECT 1 FROM flags WHERE TRUE`,
+		},
+		{
+			name: "sqlite placeholders",
+			in:   "SELECT * FROM orders WHERE id = ? AND state = ?",
+			args: 2,
+			want: "SELECT * FROM orders WHERE id = $1 AND state = $2",
+		},
+		{
+			name: "native postgres parameters untouched",
+			in:   "SELECT $2, $1, '?' AS literal, \"?\" AS identifier -- ?\n",
+			args: 2,
+			want: "SELECT $2, $1, '?' AS literal, \"?\" AS identifier -- ?\n",
+		},
+		{
+			name: "opaque quoted and comment content",
+			in:   "SELECT '?' AS s, \"BLOB?\" FROM t /* ? BLOB X'AB' */ WHERE id = ?",
+			args: 1,
+			want: "SELECT '?' AS s, \"BLOB?\" FROM t /* ? BLOB X'AB' */ WHERE id = $1",
+		},
+		{
+			name: "dollar quoted postgres string",
+			in:   "SELECT $tag$? BLOB X'AB'$tag$, ?",
+			args: 1,
+			want: "SELECT $tag$? BLOB X'AB'$tag$, $1",
+		},
+		{
+			name: "sqlite ddl and byte literals",
+			in:   "CREATE TABLE commerce (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, payload BLOB DEFAULT X'', seed BLOB DEFAULT X'cAFE')",
+			args: 0,
+			want: "CREATE TABLE commerce (id BIGSERIAL PRIMARY KEY , created_at BIGINT NOT NULL, payload BYTEA DEFAULT decode('', 'hex'), seed BYTEA DEFAULT decode('cAFE', 'hex'))",
+		},
+		{
+			name: "sqlite alter table integer is int64",
+			in:   "ALTER TABLE commerce ADD COLUMN lease_expires_unix_ms INTEGER NOT NULL DEFAULT 0",
+			args: 0,
+			want: "ALTER TABLE commerce ADD COLUMN lease_expires_unix_ms BIGINT NOT NULL DEFAULT 0",
+		},
+		{
+			name: "query integer word is untouched",
+			in:   "SELECT CAST(? AS INTEGER)",
+			args: 1,
+			want: "SELECT CAST($1 AS INTEGER)",
+		},
+		{
+			name: "sqlite busy timeout is a safe postgres no-op",
+			in:   " PRAGMA busy_timeout = 250; ",
+			args: 0,
+			want: "SELECT 1 WHERE FALSE",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Rewrite(tt.in, tt.args)
+			if err != nil {
+				t.Fatalf("rewriteSQLiteSQL() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("rewriteSQLiteSQL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeValuePreservesSQLiteBooleanRepresentation(t *testing.T) {
+	if got := NormalizeValue(true); got != int64(1) {
+		t.Fatalf("NormalizeValue(true) = %#v", got)
+	}
+	if got := NormalizeValue(false); got != int64(0) {
+		t.Fatalf("NormalizeValue(false) = %#v", got)
+	}
+	if got := NormalizeValue("true"); got != "true" {
+		t.Fatalf("NormalizeValue(string) = %#v", got)
+	}
+}
+
+func TestRewriteSQLiteSQLRejectsUnsafeOrAmbiguousSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		args int
+		want string
+	}{
+		{"mixed parameters", "SELECT $1, ?", 1, "mixed SQLite"},
+		{"wrong placeholder count", "SELECT ?, ?", 1, "placeholders"},
+		{"numbered sqlite parameter", "SELECT ?1", 1, "numbered ?NNN"},
+		{"json operator", "SELECT payload ?| array['a']", 0, "JSON ? operator"},
+		{"insert or ignore", "INSERT OR IGNORE INTO identities(id) VALUES (?)", 1, "INSERT OR IGNORE"},
+		{"invalid hex", "SELECT X'0'", 0, "invalid SQLite X'hex'"},
+		{"pragma", "PRAGMA foreign_keys = ON", 0, "SQLite-only PRAGMA"},
+		{"stray autoincrement", "CREATE TABLE t (id INT AUTOINCREMENT)", 0, "AUTOINCREMENT"},
+		{"backticks", "SELECT `id` FROM t", 0, "backtick"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Rewrite(tt.in, tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("rewriteSQLiteSQL() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
