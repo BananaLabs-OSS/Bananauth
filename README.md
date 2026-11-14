@@ -215,6 +215,12 @@ legacy backend's verification request key (its internal service secret).
 This allows an unexpired V2 consume receipt written before the handoff to
 replay on native Bananauth. Fresh installations default to the signing key.
 
+When serving through a reverse proxy, set `BANANAUTH_TRUSTED_PROXY_CIDRS` to
+the comma-separated addresses or subnets of proxies that append the actual
+peer address to `X-Forwarded-For`. Verification and password reset limits
+then use the first untrusted address from the right of the forwarded chain.
+Leave this unset for direct listeners.
+
 Exercise registration, profile reads, session validation after restart,
 logout, and email and Discord flows against the candidate. Keep
 `OUTBOUND_DELIVERY_ENABLED` off in a rehearsal using copied data, and

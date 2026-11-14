@@ -29,6 +29,10 @@ func main() {
 }
 
 func run() error {
+	proxies, err := parseTrustedProxies(os.Getenv("BANANAUTH_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return err
+	}
 	identityPath := os.Getenv("BANANAUTH_IDENTITY_DB")
 	sessionPath := os.Getenv("BANANAUTH_SESSION_DB")
 	key := token.Key(os.Getenv("JWT_SECRET"))
@@ -126,7 +130,7 @@ func run() error {
 		key: key, expiry: 24 * time.Hour, newSessionID: uuid.NewString,
 	}, discord, commands[browser.ProviderCompleteEmailVerificationV2], replayKey)
 	server := &http.Server{
-		Addr: address, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
+		Addr: address, Handler: trustForwardedAddresses(mux, proxies), ReadHeaderTimeout: 5 * time.Second,
 	}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()

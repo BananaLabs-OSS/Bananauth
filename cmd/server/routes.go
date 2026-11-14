@@ -31,6 +31,9 @@ func readJSON(w http.ResponseWriter, r *http.Request, value any) error {
 	return json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(value)
 }
 func clientIP(r *http.Request) string {
+	if forwarded, ok := r.Context().Value(clientAddressKey{}).(string); ok {
+		return forwarded
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
