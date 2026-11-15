@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/vmihailenco/msgpack/v5"
@@ -16,6 +17,7 @@ const (
 	identityPasswordResetConsumeEvent     = "bananauth.identity.password-reset.consume.v1"
 	identityEmailVerificationIssueEvent   = "bananauth.identity.email-verification.issue.v1"
 	identityEmailVerificationConsumeEvent = "bananauth.identity.email-verification.consume.v1"
+	identityAccountGetEvent               = "bananauth.identity.account.get.v1"
 	identityAccountDeleteEvent            = "bananauth.identity.account.delete.v1"
 	identityOAuthStateIssueEvent          = "bananauth.identity.oauth-state.issue.v1"
 	identityOAuthStateConsumeEvent        = "bananauth.identity.oauth-state.consume.v1"
@@ -72,3 +74,18 @@ var randomID = func() string {
 }
 
 func mustRandomID() string { return randomID() }
+
+func dispatchIdentity(identities map[string]func([]byte) ([]byte, error)) sessionDispatcher {
+	return func(event string, wire []byte) ([]byte, error) {
+		operation, version, ok := strings.Cut(strings.TrimPrefix(event, "bananauth.identity."), ".v")
+		if !ok || operation == "" || (version != "1" && version != "2") {
+			return nil, fmt.Errorf("unknown identity operation %q", event)
+		}
+		name := "auth.identity.v" + version + "." + operation
+		execute := identities[name]
+		if execute == nil {
+			return nil, fmt.Errorf("unknown identity operation %q", event)
+		}
+		return execute(wire)
+	}
+}

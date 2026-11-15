@@ -70,18 +70,7 @@ func (m *SessionManager) protect(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func registerAccountRoutes(mux *http.ServeMux, identities, sessions map[string]func([]byte) ([]byte, error), manager *SessionManager, discord *discordProvider, completeV2 func([]byte) ([]byte, error), replayKey []byte) {
-	identityCall := func(event string, wire []byte) ([]byte, error) {
-		operation, version, ok := strings.Cut(strings.TrimPrefix(event, "bananauth.identity."), ".v")
-		if !ok || operation == "" || (version != "1" && version != "2") {
-			return nil, fmt.Errorf("unknown identity operation %q", event)
-		}
-		name := "auth.identity.v" + version + "." + operation
-		execute := identities[name]
-		if execute == nil {
-			return nil, fmt.Errorf("unknown identity operation %q", event)
-		}
-		return execute(wire)
-	}
+	identityCall := dispatchIdentity(identities)
 	sessionNames := map[string]string{
 		sessionCreatedEvent: "auth.session.v1.create", sessionCreatedOwnedEvent: "auth.session.v1.create-owned",
 		sessionVerifiedEvent: "auth.session.v1.get", sessionRevokedOwnedEvent: "auth.session.v1.revoke-owned",
