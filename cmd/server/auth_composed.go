@@ -267,8 +267,12 @@ func (h *AuthHandler) issueEmailVerificationComposed(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "identity_unavailable"})
 		return
 	}
-	if !issued.OK || !issued.Value.Accepted {
+	if !issued.OK {
 		identityFailure(w, r, issued.Error, http.StatusBadRequest)
+		return
+	}
+	if !issued.Value.Accepted {
+		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "identity_unavailable"})
 		return
 	}
 	if !issued.Value.EffectQueued {

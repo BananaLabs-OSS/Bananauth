@@ -50,7 +50,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := routes(commands[browser.ProviderResolve])
+	mux := routes(commands[browser.ProviderResolve], identities)
 	exchanges := 0
 	discord := &discordProvider{
 		clientID: "fixture", clientSecret: "fixture-secret", base: "https://discord.example",
@@ -111,9 +111,21 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	if !ok || proof == "" {
 		t.Fatal("registration did not issue a session")
 	}
-	call(200, "GET", "/auth/session", proof, "")
+	accountPath := "/profiles/" + registration["account_id"].(string)
+	if result := call(200, "GET", "/auth/session", proof, ""); result["username"] != "alice" || result["display_name"] != "alice" {
+		t.Fatalf("unconfigured session labels: %v", result)
+	}
+	if result := call(200, "GET", accountPath, "", ""); result["display_name"] != "alice" {
+		t.Fatalf("unconfigured profile label: %v", result)
+	}
+	call(404, "GET", "/profiles/unknown-account", "", "")
 	call(201, "POST", "/profiles", proof, `{"display_name":"Alice"}`)
-	call(200, "GET", "/profiles/"+registration["account_id"].(string), "", "")
+	if result := call(200, "GET", accountPath, "", ""); result["display_name"] != "Alice" {
+		t.Fatalf("custom profile label: %v", result)
+	}
+	if result := call(200, "GET", "/auth/session", proof, ""); result["username"] != "alice" || result["display_name"] != "Alice" {
+		t.Fatalf("custom session labels: %v", result)
+	}
 	const serviceToken = "fixture-identity-service-token-1234567890"
 	registerIdentityRoutes(mux, identities, serviceToken)
 	callIdentity := func(path, token string, input any, status int) []byte {
@@ -297,7 +309,7 @@ func TestSessionHTTPDistinguishesDeniedFromUnavailable(t *testing.T) {
 					t.Fatal("resolver called for malformed or absent credentials")
 				}
 				return msgpack.Marshal(browser.ResolveResult{Version: browser.ContractVersion, Error: tc.outcome})
-			})
+			}, nil)
 			request := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
 			request.Header.Set("Authorization", tc.header)
 			recorder := httptest.NewRecorder()

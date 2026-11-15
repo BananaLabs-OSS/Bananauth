@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/bananalabs-oss/bananauth/internal/storage"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/browser"
 	"github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/internal/session"
+	"github.com/bananalabs-oss/bananauth/internal/storage"
 	"github.com/bananalabs-oss/bananauth/internal/token"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/google/uuid"
@@ -101,7 +101,7 @@ func run() error {
 		discord = &discordProvider{clientID: clientID, clientSecret: clientSecret, redirectURL: redirect, base: "https://discord.com",
 			client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	}
-	mux := routes(commands[browser.ProviderResolve])
+	mux := routes(commands[browser.ProviderResolve], identities)
 	if serviceToken := os.Getenv("BANANAUTH_IDENTITY_SERVICE_TOKEN"); serviceToken != "" {
 		if len(serviceToken) < 32 {
 			return errors.New("BANANAUTH_IDENTITY_SERVICE_TOKEN must be at least 32 bytes")
@@ -130,7 +130,9 @@ func run() error {
 		key: key, expiry: 24 * time.Hour, newSessionID: uuid.NewString,
 	}, discord, commands[browser.ProviderCompleteEmailVerificationV2], replayKey)
 	server := &http.Server{
-		Addr: address, Handler: trustForwardedAddresses(mux, proxies), ReadHeaderTimeout: 5 * time.Second,
+		Addr: address, Handler: trustForwardedAddresses(mux, proxies),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second,
 	}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
@@ -144,8 +146,9 @@ func run() error {
 	}
 }
 
-func routes(resolve func([]byte) ([]byte, error)) *http.ServeMux {
+func routes(resolve func([]byte) ([]byte, error), identities map[string]func([]byte) ([]byte, error)) *http.ServeMux {
 	mux := http.NewServeMux()
+	identityCall := dispatchIdentity(identities)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "healthy", "service": "bananauth"})
 	})
@@ -178,7 +181,23 @@ func routes(resolve func([]byte) ([]byte, error)) *http.ServeMux {
 			writeJSON(w, 401, errorResponse{Error: "invalid or expired token"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"valid": true, "account_id": response.AccountID})
+		username, displayName := "", ""
+		lookup := identity.AccountGetRequest{AccountID: response.AccountID}
+		if account, err := callIdentity[identityAccount](identityCall, identityAccountGetEvent, lookup); err == nil && account.OK {
+			username = strings.TrimSpace(account.Value.Username)
+		}
+		if profile, err := callIdentity[identityProfile](identityCall, identityProfileGetEvent, lookup); err == nil && profile.OK {
+			displayName = strings.TrimSpace(profile.Value.DisplayName)
+		}
+		if displayName == "" {
+			displayName = username
+		}
+		if displayName == "" {
+			displayName = response.AccountID
+		}
+		writeJSON(w, 200, map[string]any{
+			"valid": true, "account_id": response.AccountID, "username": username, "display_name": displayName,
+		})
 	})
 	return mux
 }

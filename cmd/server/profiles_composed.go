@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -40,12 +41,21 @@ func (h *ProfileHandler) createComposed(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ProfileHandler) getComposed(w http.ResponseWriter, r *http.Request) {
-	result, err := callIdentity[identityProfile](h.identity, identityProfileGetEvent, map[string]any{"account_id": r.PathValue("id")})
-	if err != nil || !result.OK {
-		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found", Message: "Profile not found"})
+	id := r.PathValue("id")
+	request := map[string]any{"account_id": id}
+	result, err := callIdentity[identityProfile](h.identity, identityProfileGetEvent, request)
+	if err == nil && result.OK {
+		writeJSON(w, http.StatusOK, result.Value)
 		return
 	}
-	writeJSON(w, http.StatusOK, result.Value)
+	if err == nil && result.Error != nil && result.Error.Code == "not_found" {
+		account, err := callIdentity[identityAccount](h.identity, identityAccountGetEvent, request)
+		if err == nil && account.OK && strings.TrimSpace(account.Value.Username) != "" {
+			writeJSON(w, http.StatusOK, identityProfile{AccountID: id, DisplayName: strings.TrimSpace(account.Value.Username)})
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, errorResponse{Error: "not_found", Message: "Profile not found"})
 }
 
 func (h *ProfileHandler) updateComposed(w http.ResponseWriter, r *http.Request) {

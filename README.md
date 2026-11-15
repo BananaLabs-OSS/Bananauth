@@ -50,7 +50,7 @@ The default listener is `127.0.0.1:8080`. Build the container with
 
 | Method   | Endpoint         | Description                       |
 | -------- | ---------------- | --------------------------------- |
-| `GET`    | `/auth/session`  | Validate token and get account ID |
+| `GET`    | `/auth/session`  | Validate token and get account ID, username, and display name |
 | `POST`   | `/auth/logout`   | Revoke current session            |
 | `POST`   | `/auth/password` | Change password                   |
 | `DELETE` | `/auth/account`  | Delete account                    |
