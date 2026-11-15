@@ -1,6 +1,6 @@
 # Bananauth
 
-Identity and authentication service — email/password + Discord OAuth, JWT sessions with revocation, and user profiles. Ships as a [Pulp](https://github.com/BananaLabs-OSS/Pulp) WASM cell.
+Identity and authentication service — email/password + Discord OAuth, JWT sessions with revocation, and user profiles. Runs as a standalone Go HTTP service.
 
 From [BananaLabs OSS](https://github.com/bananalabs-oss).
 
@@ -10,55 +10,25 @@ Bananauth handles:
 
 - **Native Auth**: Email/password registration and login
 - **OAuth**: Discord login and account creation
-- **Sessions**: JWT tokens with in-memory session revocation
+- **Sessions**: JWT tokens with persistent session revocation
 - **Password Management**: Change password, forgot/reset via OTP (Resend)
 - **Account Lifecycle**: Registration, deletion, and session validation
 - **Profiles**: Display name management for platform identity
 
-## Repository layout
+## Run locally
 
-```
-pkg/authcrypto/   Pure-Go crypto shared between cell and future consumers
-                  (GenerateOTP, GenerateState, MintJWT)
-pulp-cell/        WASM cell source — builds to bananauth.wasm (wasip1/wasm)
-  otpscope/       Pure-Go subpackage: OTP match predicate + regression tests
-  pulp.cell.toml  Cell manifest (capabilities + default config)
-pulp-deployment/  Standalone Pulp host that loads the cell
-Dockerfile.pulp   Multi-stage Docker image (build context = GolandProjects/)
-docker-entrypoint.sh  Injects JWT_SECRET into manifest at container start
+```sh
+go build -o /tmp/bananauth ./cmd/server
+BANANAUTH_IDENTITY_DB=/tmp/bananauth-identity.db \
+BANANAUTH_SESSION_DB=/tmp/bananauth-session.db \
+BANANAUTH_OTP_KEY_CURRENT="$(openssl rand -hex 32)" \
+JWT_SECRET="$(openssl rand -hex 32)" \
+LISTEN_ADDR=127.0.0.1:3000 /tmp/bananauth
 ```
 
-## Quick Start (standalone container)
-
-Build context is the **parent directory** of this repo (modules use local `replace` directives):
-
-```bash
-cd /path/to/GolandProjects
-docker build -f Bananauth/Dockerfile.pulp -t bananauth:latest .
-docker run -e JWT_SECRET=your-secret-here -p 3000:3000 bananauth:latest
-```
-
-## Configuration
-
-All config is in `pulp-cell/pulp.cell.toml` (`[config]` section). The entrypoint script injects `JWT_SECRET` from the environment at container start; everything else can be set directly in the manifest.
-
-| Key                    | Default                          | Notes                                     |
-| ---------------------- | -------------------------------- | ----------------------------------------- |
-| `jwt_secret`           | _(required — placeholder fails)_ | Injected via `JWT_SECRET` env var         |
-| `token_expiry_minutes` | `1440` (24 h)                    |                                           |
-| `auth_methods`         | `["password","discord"]`         | Drop `"discord"` if OAuth not configured  |
-| `discord_client_id`    | `""`                             | Discord OAuth app credential              |
-| `discord_client_secret`| `""`                             | Discord OAuth app credential              |
-| `discord_redirect_url` | `""`                             | Must match Discord app settings           |
-| `resend_api_key`       | `""`                             | Leave blank to log OTP to stdout (dev)    |
-| `resend_from`          | `"no-reply@example.com"`         |                                           |
-
-**Container environment variables** (injected by `docker-entrypoint.sh`):
-
-| Variable     | Required | Notes                                         |
-| ------------ | -------- | --------------------------------------------- |
-| `JWT_SECRET` | yes      | Shared HS256 secret; must match other services|
-| `HTTP_PORT`  | no       | Default `3000`                                |
+Reuse the same keys after restart to preserve sessions and pending verification.
+The default listener is `127.0.0.1:8080`. Build the container with
+`docker build -t bananauth .`.
 
 ## API Reference
 
@@ -172,31 +142,9 @@ curl -X PUT http://localhost:3000/profiles \
 curl http://localhost:3000/profiles/<account_id>
 ```
 
-## Database
+## Configuration and storage
 
-SQLite via the Pulp `storage.sqlite` capability (mounted by the host). Tables are created on first boot:
-
-- `auth_accounts` — Identity records
-- `auth_native` — Email/password credentials
-- `auth_oauth` — OAuth provider links
-- `auth_otp_codes` — Password reset codes (10-minute expiry)
-- `profiles` — User display names
-
-## Building the cell locally
-
-```bash
-cd pulp-cell
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o bananauth.wasm .
-```
-
-## License
-
-MIT
-
-## Standalone Go candidate
-
-Build the candidate with `go build -o bananauth ./cmd/server` or use
-`Dockerfile.native` for port 3000. Set `BANANAUTH_IDENTITY_DB` and
+Set `BANANAUTH_IDENTITY_DB` and
 `BANANAUTH_SESSION_DB` to the corresponding SQLite files or PostgreSQL
 connection URLs. For PostgreSQL, preserve the schema selection used by each
 owner in its connection URL. For SQLite, rehearse against consistent copies
@@ -222,7 +170,7 @@ then use the first untrusted address from the right of the forwarded chain.
 Leave this unset for direct listeners.
 
 Exercise registration, profile reads, session validation after restart,
-logout, and email and Discord flows against the candidate. Keep
+logout, and email and Discord flows against the service. Keep
 `OUTBOUND_DELIVERY_ENABLED` off in a rehearsal using copied data, and
 enable delivery on the replacement only after stopping the previous worker.
 To restrict verification mail to test inboxes, set
@@ -230,3 +178,7 @@ To restrict verification mail to test inboxes, set
 addresses. Set `SESSIONS_TRANSACTIONAL_TEST_RECIPIENTS_REQUIRED=true` to
 require the list whenever outbound delivery is enabled. Mail for other
 recipients stays in the outbox until it expires or the restriction changes.
+
+## License
+
+MIT
