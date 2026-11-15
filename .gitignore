@@ -34,17 +34,7 @@ go.work.sum
 *.db-shm
 *.db-wal
 
-pulp-cell/*.wasm
-session-owner/*.wasm
-identity-owner/*.wasm
-pulp-cell/bananauth-cell
-pulp-cell/bananauth-plugin
-pulp-cell/data/
-
-# Pulp deployment build/runtime artifacts
-pulp-deployment/*.wasm
-pulp-deployment/data/
-pulp.ctl
+/bananauth
 
 # Local agent tooling
 /.claude/
