@@ -98,12 +98,9 @@ func registerAccountRoutes(mux *http.ServeMux, identities, sessions map[string]f
 	mux.HandleFunc("POST /auth/login", auth.loginComposed)
 	mux.HandleFunc("POST /auth/password/forgot", auth.forgotPasswordComposed)
 	mux.HandleFunc("POST /auth/password/reset", auth.resetPasswordComposed)
-	mux.HandleFunc("POST /auth/email-verification", auth.issueEmailVerificationComposed)
-	mux.HandleFunc("POST /auth/email-verification/consume", auth.consumeEmailVerificationComposed)
-	mux.HandleFunc("POST /auth/email-verification/session", auth.completeEmailVerificationSessionComposed)
-	mux.HandleFunc("POST /auth/email-verification/v2", auth.IssueEmailVerificationV2)
-	mux.HandleFunc("POST /auth/email-verification/v2/consume", auth.ConsumeEmailVerificationV2)
-	mux.HandleFunc("POST /auth/email-verification/v2/session", auth.CompleteEmailVerificationSessionV2)
+	mux.HandleFunc("POST /auth/email-verification", auth.IssueEmailVerificationV2)
+	mux.HandleFunc("POST /auth/email-verification/consume", auth.ConsumeEmailVerificationV2)
+	mux.HandleFunc("POST /auth/email-verification/session", auth.CompleteEmailVerificationSessionV2)
 	mux.HandleFunc("POST /auth/logout", manager.protect(func(w http.ResponseWriter, r *http.Request) {
 		if err := manager.RevokeChecked(authentication(r).session); err != nil {
 			writeJSON(w, 503, errorResponse{Error: "session_revoke_unavailable"})

@@ -70,6 +70,13 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 		})},
 	}
 	registerAccountRoutes(mux, identities, sessions, &SessionManager{key: key, expiry: time.Hour, newSessionID: uuid.NewString}, discord, commands[browser.ProviderCompleteEmailVerificationV2], []byte(strings.Repeat("r", 32)))
+	for _, retired := range []string{"/auth/email-verification/v2", "/auth/email-verification/v2/consume", "/auth/email-verification/v2/session"} {
+		r := httptest.NewRecorder()
+		mux.ServeHTTP(r, httptest.NewRequest("POST", retired, strings.NewReader(`{"email":"retired@example.com","intent":"signup"}`)))
+		if r.Code != http.StatusNotFound {
+			t.Fatalf("retired route %s returned %d", retired, r.Code)
+		}
+	}
 	call := func(status int, method, path, proof, payload string) map[string]any {
 		t.Helper()
 		request := httptest.NewRequest(method, path, strings.NewReader(payload))
@@ -198,7 +205,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	call(200, "POST", "/auth/logout", loginProof, "")
 	call(401, "GET", "/auth/session", loginProof, "")
 	call(200, "GET", "/auth/session", proof, "")
-	call(200, "POST", "/auth/email-verification", "", `{"email":"code@example.com"}`)
+	call(202, "POST", "/auth/email-verification", "", `{"email":"code@example.com","intent":"signup"}`)
 	worker := newDeliveryWorker(identities, keys, "fixture-key", "fixture@example.com")
 	var code, idempotency string
 	var deliveries int
@@ -229,7 +236,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	}
 	const workflowToken = "fixture-browser-workflow-token-12345"
 	registerBrowserWorkflowRoutes(mux, identities, commands, workflowToken)
-	complete := map[string]string{"version": browser.ContractVersion, "email": "code@example.com", "code": code, "request_id": uuid.NewString()}
+	complete := map[string]string{"version": browser.ContractVersion, "email": "code@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
 	callIdentity("/internal/browser/email/complete", serviceToken, complete, http.StatusUnauthorized)
 	readCompletion := func(path string, input map[string]string) browser.CompleteEmailVerificationResult {
 		t.Helper()
@@ -244,17 +251,17 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	call(200, "GET", "/auth/session", passwordless.AccessToken, "")
 
 	expectedRecipient = "signup@example.com"
-	call(202, "POST", "/auth/email-verification/v2", "", `{"email":"signup@example.com","intent":"login"}`)
+	call(202, "POST", "/auth/email-verification", "", `{"email":"signup@example.com","intent":"login"}`)
 	if err := worker.drain(context.Background()); err != nil || deliveries != 1 {
 		t.Fatal("login for an unknown account must not deliver a signup code", err)
 	}
-	call(202, "POST", "/auth/email-verification/v2", "", `{"email":"signup@example.com","intent":"signup"}`)
+	call(202, "POST", "/auth/email-verification", "", `{"email":"signup@example.com","intent":"signup"}`)
 	if err := worker.drain(context.Background()); err != nil || deliveries != 2 {
 		t.Fatal("signup challenge was not delivered", err)
 	}
 	signup := map[string]string{"version": browser.ContractVersion, "email": "signup@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
-	created := readCompletion("/internal/browser/email/v2/complete", signup)
-	replayed := readCompletion("/internal/browser/email/v2/complete", signup)
+	created := readCompletion("/internal/browser/email/complete", signup)
+	replayed := readCompletion("/internal/browser/email/complete", signup)
 	if created.SessionID != replayed.SessionID || created.AccountID != replayed.AccountID {
 		t.Fatal("signup replay minted a second session")
 	}
@@ -277,7 +284,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	if err != nil || !consumed.OK || !consumed.Value.Verified {
 		t.Fatal("legacy fixture consumption failed", err)
 	}
-	got := call(200, "POST", "/auth/email-verification/v2/consume", "", `{"email":"Replay@example.com","code":" abc123 ","intent":"signup"}`)
+	got := call(200, "POST", "/auth/email-verification/consume", "", `{"email":"Replay@example.com","code":" abc123 ","intent":"signup"}`)
 	if got["account_id"] != replayAccount {
 		t.Fatal("native retry did not recover the legacy account receipt")
 	}

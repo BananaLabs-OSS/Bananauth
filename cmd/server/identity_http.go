@@ -49,8 +49,7 @@ func registerBrowserWorkflowRoutes(mux *http.ServeMux, identities, sessions map[
 	registerOwnerRoutes(mux, token, map[string]func([]byte) ([]byte, error){
 		"/internal/browser/session/resolve":      sessions[browser.ProviderResolve],
 		"/internal/browser/session/logout":       sessions[browser.ProviderLogout],
-		"/internal/browser/email/complete":       sessions[browser.ProviderCompleteEmailVerification],
-		"/internal/browser/email/v2/complete":    sessions[browser.ProviderCompleteEmailVerificationV2],
+		"/internal/browser/email/complete":       sessions[browser.ProviderCompleteEmailVerificationV2],
 		"/internal/browser/email/issue":          identities[identity.FnEmailVerificationIssue],
 		"/internal/browser/email/consume":        identities[identity.FnEmailVerificationConsume],
 		"/internal/browser/email/login/issue":    identities[identity.FnEmailLoginIssueV2],
