@@ -182,3 +182,36 @@ recipients stays in the outbox until it expires or the restriction changes.
 ## License
 
 MIT
+
+## Offline identity import
+
+The native owner can import an explicit legacy identity export without starting
+HTTP, OAuth, or outbound email workers:
+
+```sh
+go build -o /tmp/bananauth-import ./cmd/import-legacy
+BANANAUTH_OTP_KEY_CURRENT="$BANANAUTH_OTP_KEY_CURRENT" \
+  /tmp/bananauth-import -input /private/identity-export.json \
+  -database /private/rehearsal-identity.db
+```
+
+Use a consistent offline export and an isolated destination first. The JSON
+object uses `request_id`, `accounts`, `native`, `oauth_links`, `otps`, and
+`profiles`. Field names match the owner's import contract: accounts use
+`account_id`, `email`, `username`, `created_at`; native credentials use `id`,
+`account_id`, `email`, `username`, `password_hash`, `created_at`; OAuth links use
+`id`, `account_id`, `provider`, `provider_id`, `provider_email`, `created_at`;
+OTPs use `id`, `email`, `code`, `type`, `expires_at`, `account_id`; profiles use
+`account_id`, `display_name`, `created_at`, `updated_at`. Timestamps are exact
+integer Unix milliseconds. Preserve password hashes without rehashing. Treat the
+export as secret material and use private file permissions.
+
+Choose a stable `request_id` and retain the exact original export. Import is an
+atomic owner command: conflicting identities fail, and retrying the same command
+replays its receipt without reverting later account changes. The command rejects
+unknown fields, fractional timestamps, trailing documents, and oversized input.
+Its output contains only the request ID and imported counts. The OTP key must
+match the destination server. Session-owner state, existing delivery/effect
+journals, and pending workflow receipts require their own consistent backups;
+this account import does not migrate them. Never point the importer at an active
+writer during a cutover rehearsal.
