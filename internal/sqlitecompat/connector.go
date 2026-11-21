@@ -9,10 +9,9 @@ import (
 	"github.com/lib/pq"
 )
 
-// NewSQLiteCompatiblePostgresConnector returns a native database/sql connector
-// which applies the same bounded SQLite ABI translation as the Pulp host. It
-// exists for native integration and migration tooling; production cells still
-// receive database authority only through the scoped Pulp host capability.
+// NewPostgresConnector returns a database/sql connector
+// for the application's bounded SQLite-style statements. It uses database/sql
+// and lib/pq directly; application startup supplies database authority.
 func NewPostgresConnector(dsn string) (driver.Connector, error) {
 	dsn, err := nativeConnectorDSN(dsn)
 	if err != nil {

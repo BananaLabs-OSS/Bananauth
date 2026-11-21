@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/bananalabs-oss/bananauth/pkg/otpscope"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/bananalabs-oss/bananauth/pkg/passwordcrypto"
@@ -19,31 +19,31 @@ import (
 )
 
 type nativeCredential struct {
-	ID           string `msgpack:"id"`
-	AccountID    string `msgpack:"account_id"`
-	Email        string `msgpack:"email"`
-	Username     string `msgpack:"username"`
-	PasswordHash string `msgpack:"password_hash"`
-	CreatedAt    int64  `msgpack:"created_at"`
+	ID           string `msgpack:"id" json:"id"`
+	AccountID    string `msgpack:"account_id" json:"account_id"`
+	Email        string `msgpack:"email" json:"email"`
+	Username     string `msgpack:"username" json:"username"`
+	PasswordHash string `msgpack:"password_hash" json:"password_hash"`
+	CreatedAt    int64  `msgpack:"created_at" json:"created_at"`
 }
 
 type oauthLink struct {
-	ID            string `msgpack:"id"`
-	AccountID     string `msgpack:"account_id"`
-	Provider      string `msgpack:"provider"`
-	ProviderID    string `msgpack:"provider_id"`
-	ProviderEmail string `msgpack:"provider_email"`
-	CreatedAt     int64  `msgpack:"created_at"`
+	ID            string `msgpack:"id" json:"id"`
+	AccountID     string `msgpack:"account_id" json:"account_id"`
+	Provider      string `msgpack:"provider" json:"provider"`
+	ProviderID    string `msgpack:"provider_id" json:"provider_id"`
+	ProviderEmail string `msgpack:"provider_email" json:"provider_email"`
+	CreatedAt     int64  `msgpack:"created_at" json:"created_at"`
 }
 
 type otpRecord struct {
-	ID        string `msgpack:"id"`
-	Email     string `msgpack:"email"`
-	Code      string `msgpack:"code"`
-	CodeHash  string `msgpack:"code_hash,omitempty"`
-	Type      string `msgpack:"type"`
-	ExpiresAt int64  `msgpack:"expires_at"`
-	AccountID string `msgpack:"account_id"`
+	ID        string `msgpack:"id" json:"id"`
+	Email     string `msgpack:"email" json:"email"`
+	Code      string `msgpack:"code" json:"code"`
+	CodeHash  string `msgpack:"code_hash,omitempty" json:"code_hash,omitempty"`
+	Type      string `msgpack:"type" json:"type"`
+	ExpiresAt int64  `msgpack:"expires_at" json:"expires_at"`
+	AccountID string `msgpack:"account_id" json:"account_id"`
 }
 
 const (
@@ -53,7 +53,7 @@ const (
 	emailVerificationOutstanding  = 3
 )
 
-func (o *owner) otpMatches(record otpRecord, code string) bool {
+func (o *Service) otpMatches(record otpRecord, code string) bool {
 	if record.CodeHash != "" {
 		return o.otpKeys.VerifyCode(record.CodeHash, record.ID, record.Email, code, record.Type)
 	}
@@ -97,34 +97,35 @@ func consumeIssueRate(s *snapshot, key string, now int64, maximum int) bool {
 // privileged notification executor. Templates are rendered before the intent
 // crosses the owner boundary so the host never needs application state.
 type notificationEmailPayload struct {
-	To      string `msgpack:"to"`
-	Subject string `msgpack:"subject"`
-	Text    string `msgpack:"text"`
+	To      string `msgpack:"to" json:"to"`
+	Subject string `msgpack:"subject" json:"subject"`
+	Text    string `msgpack:"text" json:"text"`
 }
 
 type rateRecord struct {
-	Count           int   `msgpack:"count"`
-	WindowStartedAt int64 `msgpack:"window_started_at"`
+	Count           int   `msgpack:"count" json:"count"`
+	WindowStartedAt int64 `msgpack:"window_started_at" json:"window_started_at"`
 }
 
 type snapshot struct {
-	VerificationFactsV2 map[string]emailVerificationStateV2 `msgpack:"verification_facts_v2,omitempty"`
-	Accounts            map[string]AccountProjection        `msgpack:"accounts"`
-	NativeByEmail       map[string]nativeCredential         `msgpack:"native_by_email"`
-	NativeByAccount     map[string]nativeCredential         `msgpack:"native_by_account"`
-	Usernames           map[string]string                   `msgpack:"usernames"`
-	OAuthStates         map[string]OAuthState               `msgpack:"oauth_states"`
-	OAuthLinks          map[string]oauthLink                `msgpack:"oauth_links"`
-	OTPs                map[string]otpRecord                `msgpack:"otps"`
-	Profiles            map[string]Profile                  `msgpack:"profiles"`
-	Rates               map[string]rateRecord               `msgpack:"rates"`
-	Effects             map[string]ownerEffect              `msgpack:"effects"`
-	RetentionLeases     map[string]RetentionLease           `msgpack:"retention_leases"`
-	RetentionHolds      map[string]RetentionHold            `msgpack:"retention_holds"`
+	Format              string                              `msgpack:"format" json:"format"`
+	VerificationFactsV2 map[string]emailVerificationStateV2 `msgpack:"verification_facts_v2,omitempty" json:"verification_facts_v2,omitempty"`
+	Accounts            map[string]AccountProjection        `msgpack:"accounts" json:"accounts"`
+	NativeByEmail       map[string]nativeCredential         `msgpack:"native_by_email" json:"native_by_email"`
+	NativeByAccount     map[string]nativeCredential         `msgpack:"native_by_account" json:"native_by_account"`
+	Usernames           map[string]string                   `msgpack:"usernames" json:"usernames"`
+	OAuthStates         map[string]OAuthState               `msgpack:"oauth_states" json:"oauth_states"`
+	OAuthLinks          map[string]oauthLink                `msgpack:"oauth_links" json:"oauth_links"`
+	OTPs                map[string]otpRecord                `msgpack:"otps" json:"otps"`
+	Profiles            map[string]Profile                  `msgpack:"profiles" json:"profiles"`
+	Rates               map[string]rateRecord               `msgpack:"rates" json:"rates"`
+	Effects             map[string]ownerEffect              `msgpack:"effects" json:"effects"`
+	RetentionLeases     map[string]RetentionLease           `msgpack:"retention_leases" json:"retention_leases"`
+	RetentionHolds      map[string]RetentionHold            `msgpack:"retention_holds" json:"retention_holds"`
 }
 
 func newSnapshot() snapshot {
-	return snapshot{
+	return snapshot{Format: "bananauth.identity.v2",
 		VerificationFactsV2: map[string]emailVerificationStateV2{},
 		Accounts:            map[string]AccountProjection{}, NativeByEmail: map[string]nativeCredential{},
 		NativeByAccount: map[string]nativeCredential{}, Usernames: map[string]string{},
@@ -143,7 +144,7 @@ func (s snapshot) clone() snapshot {
 	return next
 }
 
-type owner struct {
+type Service struct {
 	mu       sync.Mutex
 	state    snapshot
 	receipts map[string]commandReceipt
@@ -151,7 +152,7 @@ type owner struct {
 	otpKeys  otpsecure.Keyring
 }
 
-func openOwner(ctx context.Context, store eventStore, otpKeys otpsecure.Keyring) (*owner, error) {
+func openOwner(ctx context.Context, store eventStore, otpKeys otpsecure.Keyring) (*Service, error) {
 	if len(otpKeys.Current) == 0 {
 		return nil, fmt.Errorf("open identity owner: OTP key is required")
 	}
@@ -163,7 +164,7 @@ func openOwner(ctx context.Context, store eventStore, otpKeys otpsecure.Keyring)
 		return nil, err
 	}
 	normalizeSnapshot(&state)
-	return &owner{state: state, receipts: receipts, store: store, otpKeys: otpKeys}, nil
+	return &Service{state: state, receipts: receipts, store: store, otpKeys: otpKeys}, nil
 }
 
 func normalizeSnapshot(state *snapshot) {
@@ -180,69 +181,40 @@ func normalizeSnapshot(state *snapshot) {
 	}
 }
 
-func (o *owner) notificationIntent(effectID, recipient, subject, text string, expiresAt int64) (effect.Intent, error) {
+func (o *Service) notificationIntent(effectID, recipient, subject, text string, expiresAt int64) (notification.Message, error) {
 	plain, err := msgpack.Marshal(notificationEmailPayload{To: recipient, Subject: subject, Text: text})
 	if err != nil {
-		return effect.Intent{}, err
+		return notification.Message{}, err
 	}
 	encrypted, err := o.otpKeys.Seal(effectID, recipient, expiresAt, plain)
 	if err != nil {
-		return effect.Intent{}, err
+		return notification.Message{}, err
 	}
-	return effect.NewIntent(effectID, effect.KindNotificationEmailSend, effectID, encrypted)
+	return notification.NewMessage(effectID, effectID, encrypted)
 }
 
-func (o *owner) providers() map[string]func([]byte) ([]byte, error) {
-	return map[string]func([]byte) ([]byte, error){
-		FnAccountErasureGetV1: o.accountErasureGetV1,
-		FnEmailLoginIssueV2:   o.emailLoginIssueV2, FnEmailSignupIssueV2: o.emailSignupIssueV2,
-		FnEmailLoginConsumeV2: o.emailLoginConsumeV2, FnEmailSignupConsumeV2: o.emailSignupConsumeV2, FnEmailVerificationFactGetV2: o.emailVerificationFactGetV2,
-		FnNativeRegister: o.nativeRegister, FnNativeAuthenticate: o.nativeAuthenticate,
-		FnNativePasswordChange: o.passwordChange, FnNativeCredentialAttach: o.nativeCredentialAttach,
-		FnPasswordResetIssue:   o.passwordResetIssue,
-		FnPasswordResetConsume: o.passwordResetConsume, FnAccountDelete: o.accountDelete, FnAccountErase: o.accountErase,
-		FnRetentionLeaseCreate: o.retentionLeaseCreate, FnRetentionLeaseRenew: o.retentionLeaseRenew,
-		FnRetentionLeaseRelease: o.retentionLeaseRelease, FnRetentionLeaseList: o.retentionLeaseList,
-		FnRetentionEligibility: o.retentionEligibility,
-		FnRetentionHoldAcquire: o.retentionHoldAcquire, FnRetentionHoldRelease: o.retentionHoldRelease,
-		FnEmailVerificationIssue: o.emailVerificationIssue, FnEmailVerificationConsume: o.emailVerificationConsume,
-		FnOAuthStateIssue: o.oauthStateIssue, FnOAuthStateConsume: o.oauthStateConsume,
-		FnOAuthResolve: o.oauthResolve, FnOAuthUpsert: o.oauthUpsert,
-		FnAccountGet:    o.accountGet,
-		FnProfileCreate: o.profileCreate, FnProfileGet: o.profileGet, FnProfileUpdate: o.profileUpdate,
-		FnRateCheck: o.rateCheck, FnRateClear: o.rateClear,
-		FnLegacyImport:           o.legacyImport,
-		effect.FnObserveConsumer: o.observeConsumer, FnEffectsClaim: o.effectsClaim, FnEffectsAck: o.effectsAck, FnEffectsRetry: o.effectsRetry,
-		FnEffectsCheckDelivery: o.effectsCheckDelivery,
-	}
-}
-
-func (o *owner) accountGet(raw []byte) ([]byte, error) {
-	var req AccountGetRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) AccountGet(req AccountGetRequest) (Result[AccountProjection], error) {
+	return runQuery[AccountProjection](o, func(s snapshot) (AccountProjection, error) {
 		if req.AccountID == "" && strings.TrimSpace(req.Email) != "" {
 			email := strings.ToLower(strings.TrimSpace(req.Email))
 			var found *AccountProjection
 			for _, account := range s.Accounts {
 				if strings.ToLower(strings.TrimSpace(account.Email)) == email {
 					if found != nil {
-						return nil, domain("conflict", "Account email is ambiguous")
+						return zeroValue[AccountProjection](), domain("conflict", "Account email is ambiguous")
 					}
 					copy := account
 					found = &copy
 				}
 			}
 			if found == nil {
-				return nil, domain("not_found", "Account not found")
+				return zeroValue[AccountProjection](), domain("not_found", "Account not found")
 			}
 			return *found, nil
 		}
 		value, ok := s.Accounts[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "Account not found")
+			return zeroValue[AccountProjection](), domain("not_found", "Account not found")
 		}
 		return value, nil
 	})
@@ -253,145 +225,21 @@ type domainError struct{ code, message string }
 func (e domainError) Error() string     { return e.message }
 func domain(code, message string) error { return domainError{code: code, message: message} }
 
-func (o *owner) command(operation, requestID string, request any, mutate func(*snapshot) (any, error)) ([]byte, error) {
-	if strings.TrimSpace(requestID) == "" {
-		return encode(failure[any]("invalid_request", "request_id is required"))
-	}
-	requestWire, err := msgpack.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(requestWire)
-	digest := hex.EncodeToString(sum[:])
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	for attempt := 0; attempt < 128; attempt++ {
-		revision, current, prior, err := o.store.LoadCommand(context.Background(), operation, requestID)
-		if err != nil {
-			return nil, fmt.Errorf("refresh %s: %w", operation, err)
-		}
-		normalizeSnapshot(&current)
-		o.state = current
-		if prior != nil {
-			if prior.Digest != digest {
-				return encode(failure[any]("idempotency_conflict", "request_id was reused with a different payload"))
-			}
-			o.receipts[operation+":"+requestID] = *prior
-			return append([]byte(nil), prior.Response...), nil
-		}
-		next := current.clone()
-		value, err := mutate(&next)
-		if err != nil {
-			if typed, ok := err.(domainError); ok {
-				return encode(failure[any](typed.code, typed.message))
-			}
-			return nil, err
-		}
-		response, err := encode(success(value))
-		if err != nil {
-			return nil, err
-		}
-		receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
-		committed, err := o.store.AppendCAS(context.Background(), revision, durableRecord{Receipt: receipt, Snapshot: next})
-		if err != nil {
-			return nil, fmt.Errorf("persist %s: %w", operation, err)
-		}
-		if !committed {
-			continue
-		}
-		o.state, o.receipts[operation+":"+requestID] = next, receipt
-		return response, nil
-	}
-	return nil, fmt.Errorf("persist %s: owner revision remained contended", operation)
-}
-
-func (o *owner) commandRaw(operation, requestID string, request any, mutate func(*snapshot) (any, error)) ([]byte, error) {
-	if strings.TrimSpace(requestID) == "" {
-		return nil, fmt.Errorf("request_id is required")
-	}
-	requestWire, err := msgpack.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(requestWire)
-	digest := hex.EncodeToString(sum[:])
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	for attempt := 0; attempt < 128; attempt++ {
-		revision, current, prior, err := o.store.LoadCommand(context.Background(), operation, requestID)
-		if err != nil {
-			return nil, fmt.Errorf("refresh %s: %w", operation, err)
-		}
-		normalizeSnapshot(&current)
-		o.state = current
-		if prior != nil {
-			if prior.Digest != digest {
-				return nil, fmt.Errorf("request_id was reused with a different payload")
-			}
-			o.receipts[operation+":"+requestID] = *prior
-			return append([]byte(nil), prior.Response...), nil
-		}
-		next := current.clone()
-		value, err := mutate(&next)
-		if err != nil {
-			return nil, err
-		}
-		response, err := msgpack.Marshal(value)
-		if err != nil {
-			return nil, err
-		}
-		receipt := commandReceipt{Operation: operation, RequestID: requestID, Digest: digest, Response: response}
-		committed, err := o.store.AppendCAS(context.Background(), revision, durableRecord{Receipt: receipt, Snapshot: next})
-		if err != nil {
-			return nil, fmt.Errorf("persist %s: %w", operation, err)
-		}
-		if !committed {
-			continue
-		}
-		o.state, o.receipts[operation+":"+requestID] = next, receipt
-		return response, nil
-	}
-	return nil, fmt.Errorf("persist %s: owner revision remained contended", operation)
-}
-
-func (o *owner) query(run func(snapshot) (any, error)) ([]byte, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	_, current, _, err := o.store.LoadCommand(context.Background(), "", "")
-	if err != nil {
-		return nil, fmt.Errorf("refresh identity query: %w", err)
-	}
-	normalizeSnapshot(&current)
-	o.state = current
-	value, err := run(current)
-	if err != nil {
-		if typed, ok := err.(domainError); ok {
-			return encode(failure[any](typed.code, typed.message))
-		}
-		return nil, err
-	}
-	return encode(success(value))
-}
-
-func (o *owner) nativeRegister(raw []byte) ([]byte, error) {
-	var req NativeRegisterRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) NativeRegister(req NativeRegisterRequest) (Result[AccountProjection], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnNativeRegister, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[AccountProjection](o, FnNativeRegister, req.RequestID, req, func(s *snapshot) (AccountProjection, error) {
 		if blank(req.AccountID) || blank(req.CredentialID) || blank(req.Email) || blank(req.Username) || len(req.Password) < 8 || req.Now <= 0 {
-			return nil, domain("invalid_request", "native registration is incomplete")
+			return zeroValue[AccountProjection](), domain("invalid_request", "native registration is incomplete")
 		}
 		if _, ok := s.NativeByEmail[req.Email]; ok {
-			return nil, domain("email_taken", "An account with this email already exists")
+			return zeroValue[AccountProjection](), domain("email_taken", "An account with this email already exists")
 		}
 		if _, ok := s.Usernames[req.Username]; ok {
-			return nil, domain("username_taken", "This username is already taken")
+			return zeroValue[AccountProjection](), domain("username_taken", "This username is already taken")
 		}
 		hash, err := passwordcrypto.Hash(req.Password)
 		if err != nil {
-			return nil, err
+			return zeroValue[AccountProjection](), err
 		}
 		account := AccountProjection{AccountID: req.AccountID, Email: req.Email, Username: req.Username, CreatedAt: req.Now}
 		credential := nativeCredential{ID: req.CredentialID, AccountID: req.AccountID, Email: req.Email, Username: req.Username, PasswordHash: hash, CreatedAt: req.Now}
@@ -401,50 +249,42 @@ func (o *owner) nativeRegister(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) nativeAuthenticate(raw []byte) ([]byte, error) {
-	var req NativeAuthenticateRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) NativeAuthenticate(req NativeAuthenticateRequest) (Result[AccountProjection], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.query(func(s snapshot) (any, error) {
+	return runQuery[AccountProjection](o, func(s snapshot) (AccountProjection, error) {
 		credential, ok := s.NativeByEmail[req.Email]
 		if !ok || !passwordcrypto.Verify(credential.PasswordHash, req.Password) {
-			return nil, domain("invalid_credentials", "Invalid email or password")
+			return zeroValue[AccountProjection](), domain("invalid_credentials", "Invalid email or password")
 		}
 		return s.Accounts[credential.AccountID], nil
 	})
 }
 
-func (o *owner) nativeCredentialAttach(raw []byte) ([]byte, error) {
-	var req NativeCredentialAttachRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) NativeCredentialAttach(req NativeCredentialAttachRequest) (Result[AccountProjection], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnNativeCredentialAttach, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[AccountProjection](o, FnNativeCredentialAttach, req.RequestID, req, func(s *snapshot) (AccountProjection, error) {
 		account, exists := s.Accounts[req.AccountID]
 		if !exists {
-			return nil, domain("not_found", "account not found")
+			return zeroValue[AccountProjection](), domain("not_found", "account not found")
 		}
 		if blank(req.CredentialID) || blank(req.Email) || blank(req.Username) || len(req.Password) < 8 || req.Now <= 0 {
-			return nil, domain("invalid_request", "native credential attach is incomplete")
+			return zeroValue[AccountProjection](), domain("invalid_request", "native credential attach is incomplete")
 		}
 		if account.Email == "" || !strings.EqualFold(account.Email, req.Email) {
-			return nil, domain("invalid_email", "native email must match the authenticated account")
+			return zeroValue[AccountProjection](), domain("invalid_email", "native email must match the authenticated account")
 		}
 		if _, exists := s.NativeByAccount[req.AccountID]; exists {
-			return nil, domain("native_exists", "account already has a native credential")
+			return zeroValue[AccountProjection](), domain("native_exists", "account already has a native credential")
 		}
 		if existing, exists := s.NativeByEmail[req.Email]; exists && existing.AccountID != req.AccountID {
-			return nil, domain("email_taken", "email is already attached to another account")
+			return zeroValue[AccountProjection](), domain("email_taken", "email is already attached to another account")
 		}
 		if existing, exists := s.Usernames[req.Username]; exists && existing != req.AccountID {
-			return nil, domain("username_taken", "username is already taken")
+			return zeroValue[AccountProjection](), domain("username_taken", "username is already taken")
 		}
 		hash, err := passwordcrypto.Hash(req.Password)
 		if err != nil {
-			return nil, err
+			return zeroValue[AccountProjection](), err
 		}
 		credential := nativeCredential{ID: req.CredentialID, AccountID: req.AccountID, Email: req.Email, Username: req.Username, PasswordHash: hash, CreatedAt: req.Now}
 		s.NativeByAccount[req.AccountID], s.NativeByEmail[req.Email], s.Usernames[req.Username] = credential, credential, req.AccountID
@@ -454,25 +294,21 @@ func (o *owner) nativeCredentialAttach(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) passwordChange(raw []byte) ([]byte, error) {
-	var req PasswordChangeRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnNativePasswordChange, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) PasswordChange(req PasswordChangeRequest) (Result[map[string]any], error) {
+	return runCommand[map[string]any](o, FnNativePasswordChange, req.RequestID, req, func(s *snapshot) (map[string]any, error) {
 		credential, ok := s.NativeByAccount[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "No native account found")
+			return zeroValue[map[string]any](), domain("not_found", "No native account found")
 		}
 		if !passwordcrypto.Verify(credential.PasswordHash, req.CurrentPassword) {
-			return nil, domain("invalid_password", "Current password is incorrect")
+			return zeroValue[map[string]any](), domain("invalid_password", "Current password is incorrect")
 		}
 		if len(req.NewPassword) < 8 {
-			return nil, domain("invalid_request", "new password is too short")
+			return zeroValue[map[string]any](), domain("invalid_request", "new password is too short")
 		}
 		hash, err := passwordcrypto.Hash(req.NewPassword)
 		if err != nil {
-			return nil, err
+			return zeroValue[map[string]any](), err
 		}
 		credential.PasswordHash = hash
 		s.NativeByAccount[req.AccountID], s.NativeByEmail[credential.Email] = credential, credential
@@ -480,22 +316,18 @@ func (o *owner) passwordChange(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) passwordResetIssue(raw []byte) ([]byte, error) {
-	var req PasswordResetIssueRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) PasswordResetIssue(req PasswordResetIssueRequest) (Result[PasswordResetIssueResult], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnPasswordResetIssue, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[PasswordResetIssueResult](o, FnPasswordResetIssue, req.RequestID, req, func(s *snapshot) (PasswordResetIssueResult, error) {
 		credential, exists := s.NativeByEmail[req.Email]
 		if !exists {
 			return PasswordResetIssueResult{Accepted: true}, nil
 		}
 		if blank(req.OTPID) || blank(req.EffectID) || blank(req.Code) || req.Now <= 0 || req.ExpiresAt <= req.Now {
-			return nil, domain("invalid_request", "password reset issue is incomplete")
+			return zeroValue[PasswordResetIssueResult](), domain("invalid_request", "password reset issue is incomplete")
 		}
 		if _, exists := s.Effects[req.EffectID]; exists {
-			return nil, domain("idempotency_conflict", "effect id already exists")
+			return zeroValue[PasswordResetIssueResult](), domain("idempotency_conflict", "effect id already exists")
 		}
 		for id, value := range s.OTPs {
 			if value.Email == req.Email && value.Type == "password_reset" {
@@ -505,20 +337,16 @@ func (o *owner) passwordResetIssue(raw []byte) ([]byte, error) {
 		s.OTPs[req.OTPID] = otpRecord{ID: req.OTPID, Email: req.Email, CodeHash: o.otpKeys.CodeMAC(req.OTPID, req.Email, req.Code, "password_reset"), Type: "password_reset", ExpiresAt: req.ExpiresAt, AccountID: credential.AccountID}
 		intent, err := o.notificationIntent(req.EffectID, req.Email, "Password reset code", fmt.Sprintf("Your reset code: %s\nExpires in 10 minutes.", strings.ToUpper(req.Code)), req.ExpiresAt)
 		if err != nil {
-			return nil, err
+			return zeroValue[PasswordResetIssueResult](), err
 		}
-		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now, ExpiresAt: req.ExpiresAt}
+		s.Effects[intent.ID] = ownerEffect{Message: intent, Status: string(notification.Pending), AvailableAt: req.Now, ExpiresAt: req.ExpiresAt}
 		return PasswordResetIssueResult{Accepted: true, EffectQueued: true}, nil
 	})
 }
 
-func (o *owner) passwordResetConsume(raw []byte) ([]byte, error) {
-	var req PasswordResetConsumeRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) PasswordResetConsume(req PasswordResetConsumeRequest) (Result[map[string]any], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnPasswordResetConsume, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[map[string]any](o, FnPasswordResetConsume, req.RequestID, req, func(s *snapshot) (map[string]any, error) {
 		var id string
 		var otp otpRecord
 		for key, candidate := range s.OTPs {
@@ -528,15 +356,15 @@ func (o *owner) passwordResetConsume(raw []byte) ([]byte, error) {
 			}
 		}
 		if id == "" {
-			return nil, domain("invalid_code", "Invalid or expired reset code")
+			return zeroValue[map[string]any](), domain("invalid_code", "Invalid or expired reset code")
 		}
 		credential, ok := s.NativeByAccount[otp.AccountID]
 		if !ok {
-			return nil, domain("not_found", "native account not found")
+			return zeroValue[map[string]any](), domain("not_found", "native account not found")
 		}
 		hash, err := passwordcrypto.Hash(req.NewPassword)
 		if err != nil {
-			return nil, err
+			return zeroValue[map[string]any](), err
 		}
 		delete(s.OTPs, id)
 		credential.PasswordHash = hash
@@ -546,125 +374,20 @@ func (o *owner) passwordResetConsume(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) emailVerificationIssue(raw []byte) ([]byte, error) {
-	var req EmailVerificationIssueRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
+func (o *Service) AccountDelete(req AccountDeleteRequest) (Result[AccountProjection], error) {
 	req.Email = otpscope.NormalizeEmail(req.Email)
-	req.CallerKey = strings.TrimSpace(req.CallerKey)
-	return o.command(FnEmailVerificationIssue, req.RequestID, req, func(s *snapshot) (any, error) {
-		if blank(req.VerificationID) || blank(req.EffectID) || blank(req.Email) || blank(req.Code) || req.Now <= 0 || req.ExpiresAt <= req.Now {
-			return nil, domain("invalid_request", "email verification issue is incomplete")
-		}
-		if _, exists := s.Effects[req.EffectID]; exists {
-			return nil, domain("idempotency_conflict", "effect id already exists")
-		}
-		pruneExpiredVerificationState(s, req.Now)
-		recipientRateKey := rateKey("email_verification_issue_recipient", req.Email)
-		callerAllowed := true
-		if req.CallerKey != "" {
-			callerDigest := sha256.Sum256([]byte("bananauth:verification-caller:v1\x00" + req.CallerKey))
-			callerAllowed = consumeIssueRate(s, rateKey("email_verification_issue_caller", hex.EncodeToString(callerDigest[:])), req.Now, emailVerificationCallerMax)
-		}
-		if !consumeIssueRate(s, recipientRateKey, req.Now, emailVerificationRecipientMax) || !callerAllowed {
-			return EmailVerificationIssueResult{Accepted: true}, nil
-		}
-		outstanding := 0
-		for _, value := range s.OTPs {
-			if value.Email == req.Email && value.Type == "sessions_email_verification" {
-				outstanding++
-			}
-		}
-		if outstanding >= emailVerificationOutstanding {
-			return EmailVerificationIssueResult{Accepted: true}, nil
-		}
-		// Keep a bounded number of earlier unexpired codes valid until one is consumed. Delivery is
-		// asynchronous, so deleting the prior OTP here can make a delayed newer
-		// email invalidate the only code the customer has actually received.
-		s.OTPs[req.VerificationID] = otpRecord{ID: req.VerificationID, Email: req.Email, CodeHash: o.otpKeys.CodeMAC(req.VerificationID, req.Email, req.Code, "sessions_email_verification"), Type: "sessions_email_verification", ExpiresAt: req.ExpiresAt}
-		intent, err := o.notificationIntent(req.EffectID, req.Email, "Your Sessions verification code", fmt.Sprintf("Your verification code: %s\nExpires in 10 minutes.", strings.ToUpper(req.Code)), req.ExpiresAt)
-		if err != nil {
-			return nil, err
-		}
-		s.Effects[intent.ID] = ownerEffect{Intent: intent, Status: string(effect.Pending), AvailableAt: req.Now, ExpiresAt: req.ExpiresAt}
-		return EmailVerificationIssueResult{Accepted: true, EffectQueued: true}, nil
-	})
-}
-
-func (o *owner) emailVerificationConsume(raw []byte) ([]byte, error) {
-	var req EmailVerificationConsumeRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	req.Email = otpscope.NormalizeEmail(req.Email)
-	// Now is validation input, not command identity. Excluding it from the
-	// receipt digest lets an identical email/code retry replay a committed
-	// success after the original HTTP response was lost.
-	idempotencyRequest := req
-	idempotencyRequest.Now = 0
-	return o.command(FnEmailVerificationConsume, req.RequestID, idempotencyRequest, func(s *snapshot) (any, error) {
-		pruneExpiredVerificationState(s, req.Now)
-		for _, value := range s.OTPs {
-			if value.Email == req.Email && value.Type == "sessions_email_verification" && o.otpMatches(value, req.Code) && value.ExpiresAt > req.Now {
-				accountID := accountIDForEmail(s, req.Email)
-				if accountID == "" {
-					if blank(req.AccountID) {
-						return nil, domain("invalid_request", "email verification account id is required for a new identity")
-					}
-					accountID = req.AccountID
-					s.Accounts[accountID] = AccountProjection{AccountID: accountID, Email: req.Email, CreatedAt: req.Now}
-				}
-				// A successful login consumes every outstanding code for this
-				// address. This preserves single-use semantics even when multiple
-				// replacement emails were in flight or arrived out of order.
-				for candidateID, candidate := range s.OTPs {
-					if candidate.Email == req.Email && candidate.Type == "sessions_email_verification" {
-						delete(s.OTPs, candidateID)
-					}
-				}
-				return EmailVerificationConsumeResult{
-					Verified: true, AccountID: accountID, VerifiedEmail: req.Email,
-					EmailVerifiedAtUnixMilli:            req.Now,
-					EmailVerificationExpiresAtUnixMilli: value.ExpiresAt,
-					VerificationRequestID:               req.RequestID,
-				}, nil
-			}
-		}
-		return nil, domain("invalid_code", "invalid or expired verification code")
-	})
-}
-
-// accountIDForEmail deliberately scans the small owner-local projection
-// rather than introducing a second mutable email index. Native and OAuth
-// accounts already persist their canonical email in this projection.
-func accountIDForEmail(s *snapshot, email string) string {
-	for accountID, account := range s.Accounts {
-		if strings.EqualFold(account.Email, email) {
-			return accountID
-		}
-	}
-	return ""
-}
-
-func (o *owner) accountDelete(raw []byte) ([]byte, error) {
-	var req AccountDeleteRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	req.Email = otpscope.NormalizeEmail(req.Email)
-	return o.command(FnAccountDelete, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[AccountProjection](o, FnAccountDelete, req.RequestID, req, func(s *snapshot) (AccountProjection, error) {
 		account, ok := s.Accounts[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "No account found")
+			return zeroValue[AccountProjection](), domain("not_found", "No account found")
 		}
 		live := activeRetentionLeases(s, req.AccountID, req.Now)
 		if len(live) != 0 || len(activeRetentionHolds(s, req.AccountID)) != 0 {
-			return nil, domain("retention_active", "account has active retention protection")
+			return zeroValue[AccountProjection](), domain("retention_active", "account has active retention protection")
 		}
 		if native, ok := s.NativeByAccount[req.AccountID]; ok {
 			if !passwordcrypto.Verify(native.PasswordHash, req.Password) {
-				return nil, domain("invalid_password", "Password is incorrect")
+				return zeroValue[AccountProjection](), domain("invalid_password", "Password is incorrect")
 			}
 			delete(s.NativeByEmail, native.Email)
 			delete(s.NativeByAccount, req.AccountID)
@@ -683,7 +406,7 @@ func (o *owner) accountDelete(raw []byte) ([]byte, error) {
 				}
 			}
 			if !authorized {
-				return nil, domain("invalid_email", "Email does not match account")
+				return zeroValue[AccountProjection](), domain("invalid_email", "Email does not match account")
 			}
 		}
 		for key, link := range s.OAuthLinks {
@@ -709,24 +432,20 @@ func (o *owner) accountDelete(raw []byte) ([]byte, error) {
 }
 
 // accountErase is deliberately distinct from user-initiated accountDelete.
-// Its authority is supplied by Pulp's exact provider manifest, and it still
+// Its authority is supplied by the authenticated erasure HTTP service credential, and it still
 // performs the retention check in the same owner transaction as deletion so a
 // concurrently renewed application lease always wins.
-func (o *owner) accountErase(raw []byte) ([]byte, error) {
-	var req AccountEraseRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnAccountErase, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) AccountErase(req AccountEraseRequest) (Result[AccountProjection], error) {
+	return runCommand[AccountProjection](o, FnAccountErase, req.RequestID, req, func(s *snapshot) (AccountProjection, error) {
 		if blank(req.AccountID) || blank(req.ReasonID) || req.Now <= 0 {
-			return nil, domain("invalid_request", "account_id, reason_id, and now are required")
+			return zeroValue[AccountProjection](), domain("invalid_request", "account_id, reason_id, and now are required")
 		}
 		account, ok := s.Accounts[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "No account found")
+			return zeroValue[AccountProjection](), domain("not_found", "No account found")
 		}
 		if live := activeRetentionLeases(s, req.AccountID, req.Now); len(live) != 0 || len(activeRetentionHolds(s, req.AccountID)) != 0 {
-			return nil, domain("retention_active", "account has active retention protection")
+			return zeroValue[AccountProjection](), domain("retention_active", "account has active retention protection")
 		}
 		if native, ok := s.NativeByAccount[req.AccountID]; ok {
 			delete(s.NativeByEmail, native.Email)
@@ -784,57 +503,45 @@ func validateRetentionLease(lease RetentionLease, now int64) error {
 	return nil
 }
 
-func (o *owner) retentionLeaseCreate(raw []byte) ([]byte, error) {
-	var req RetentionLeaseCreateRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnRetentionLeaseCreate, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) RetentionLeaseCreate(req RetentionLeaseCreateRequest) (Result[RetentionLease], error) {
+	return runCommand[RetentionLease](o, FnRetentionLeaseCreate, req.RequestID, req, func(s *snapshot) (RetentionLease, error) {
 		if err := validateRetentionLease(req.Lease, req.Now); err != nil {
-			return nil, err
+			return zeroValue[RetentionLease](), err
 		}
 		if _, ok := s.Accounts[req.Lease.AccountID]; !ok {
-			return nil, domain("not_found", "No account found")
+			return zeroValue[RetentionLease](), domain("not_found", "No account found")
 		}
 		key := retentionLeaseKey(req.Lease.AccountID, req.Lease.LeaseID)
 		if _, exists := s.RetentionLeases[key]; exists {
-			return nil, domain("conflict", "retention lease already exists")
+			return zeroValue[RetentionLease](), domain("conflict", "retention lease already exists")
 		}
 		s.RetentionLeases[key] = req.Lease
 		return req.Lease, nil
 	})
 }
 
-func (o *owner) retentionLeaseRenew(raw []byte) ([]byte, error) {
-	var req RetentionLeaseRenewRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnRetentionLeaseRenew, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) RetentionLeaseRenew(req RetentionLeaseRenewRequest) (Result[RetentionLease], error) {
+	return runCommand[RetentionLease](o, FnRetentionLeaseRenew, req.RequestID, req, func(s *snapshot) (RetentionLease, error) {
 		if err := validateRetentionLease(req.Lease, req.Now); err != nil {
-			return nil, err
+			return zeroValue[RetentionLease](), err
 		}
 		key := retentionLeaseKey(req.Lease.AccountID, req.Lease.LeaseID)
 		prior, exists := s.RetentionLeases[key]
 		if !exists || prior.ExpiresAt <= req.Now {
-			return nil, domain("not_found", "retention lease not found")
+			return zeroValue[RetentionLease](), domain("not_found", "retention lease not found")
 		}
 		if prior.ReasonID != req.Lease.ReasonID {
-			return nil, domain("conflict", "retention lease reason cannot change")
+			return zeroValue[RetentionLease](), domain("conflict", "retention lease reason cannot change")
 		}
 		s.RetentionLeases[key] = req.Lease
 		return req.Lease, nil
 	})
 }
 
-func (o *owner) retentionLeaseRelease(raw []byte) ([]byte, error) {
-	var req RetentionLeaseReleaseRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnRetentionLeaseRelease, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) RetentionLeaseRelease(req RetentionLeaseReleaseRequest) (Result[RetentionEligibility], error) {
+	return runCommand[RetentionEligibility](o, FnRetentionLeaseRelease, req.RequestID, req, func(s *snapshot) (RetentionEligibility, error) {
 		if blank(req.AccountID) || blank(req.LeaseID) || blank(req.ReasonID) {
-			return nil, domain("invalid_request", "account_id, lease_id, and reason_id are required")
+			return zeroValue[RetentionEligibility](), domain("invalid_request", "account_id, lease_id, and reason_id are required")
 		}
 		key := retentionLeaseKey(req.AccountID, req.LeaseID)
 		lease, exists := s.RetentionLeases[key]
@@ -843,65 +550,49 @@ func (o *owner) retentionLeaseRelease(raw []byte) ([]byte, error) {
 			return retentionEligibilityFor(s, req.AccountID, req.Now), nil
 		}
 		if lease.ReasonID != req.ReasonID {
-			return nil, domain("conflict", "retention lease reason does not match")
+			return zeroValue[RetentionEligibility](), domain("conflict", "retention lease reason does not match")
 		}
 		delete(s.RetentionLeases, key)
 		return retentionEligibilityFor(s, req.AccountID, req.Now), nil
 	})
 }
 
-func (o *owner) retentionLeaseList(raw []byte) ([]byte, error) {
-	var req RetentionLeaseListRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) RetentionLeaseList(req RetentionLeaseListRequest) (Result[RetentionLeaseListResult], error) {
+	return runQuery[RetentionLeaseListResult](o, func(s snapshot) (RetentionLeaseListResult, error) {
 		if blank(req.AccountID) {
-			return nil, domain("invalid_request", "account_id is required")
+			return zeroValue[RetentionLeaseListResult](), domain("invalid_request", "account_id is required")
 		}
 		return RetentionLeaseListResult{Leases: activeRetentionLeases(&s, req.AccountID, req.Now)}, nil
 	})
 }
 
-func (o *owner) retentionEligibility(raw []byte) ([]byte, error) {
-	var req RetentionEligibilityRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) RetentionEligibility(req RetentionEligibilityRequest) (Result[RetentionEligibility], error) {
+	return runQuery[RetentionEligibility](o, func(s snapshot) (RetentionEligibility, error) {
 		if blank(req.AccountID) {
-			return nil, domain("invalid_request", "account_id is required")
+			return zeroValue[RetentionEligibility](), domain("invalid_request", "account_id is required")
 		}
 		return retentionEligibilityFor(&s, req.AccountID, req.Now), nil
 	})
 }
 
-func (o *owner) oauthStateIssue(raw []byte) ([]byte, error) {
-	var req OAuthStateIssueRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnOAuthStateIssue, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) OauthStateIssue(req OAuthStateIssueRequest) (Result[OAuthState], error) {
+	return runCommand[OAuthState](o, FnOAuthStateIssue, req.RequestID, req, func(s *snapshot) (OAuthState, error) {
 		if blank(req.State.State) || blank(req.State.Provider) || req.State.ExpiresAt <= 0 {
-			return nil, domain("invalid_request", "OAuth state is incomplete")
+			return zeroValue[OAuthState](), domain("invalid_request", "OAuth state is incomplete")
 		}
 		if _, exists := s.OAuthStates[req.State.State]; exists {
-			return nil, domain("conflict", "OAuth state already exists")
+			return zeroValue[OAuthState](), domain("conflict", "OAuth state already exists")
 		}
 		s.OAuthStates[req.State.State] = req.State
 		return req.State, nil
 	})
 }
 
-func (o *owner) oauthStateConsume(raw []byte) ([]byte, error) {
-	var req OAuthStateConsumeRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnOAuthStateConsume, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) OauthStateConsume(req OAuthStateConsumeRequest) (Result[OAuthState], error) {
+	return runCommand[OAuthState](o, FnOAuthStateConsume, req.RequestID, req, func(s *snapshot) (OAuthState, error) {
 		value, ok := s.OAuthStates[req.State]
 		if !ok || value.ConsumedAt != 0 || value.ExpiresAt <= req.Now || value.Provider != req.Provider || value.RedirectBinding != req.RedirectBinding {
-			return nil, domain("invalid_state", "OAuth state mismatch or expired")
+			return zeroValue[OAuthState](), domain("invalid_state", "OAuth state mismatch or expired")
 		}
 		value.ConsumedAt = req.Now
 		s.OAuthStates[req.State] = value
@@ -911,32 +602,24 @@ func (o *owner) oauthStateConsume(raw []byte) ([]byte, error) {
 
 func oauthKey(provider, id string) string { return provider + "\x00" + id }
 
-func (o *owner) oauthResolve(raw []byte) ([]byte, error) {
-	var req OAuthResolveRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) OauthResolve(req OAuthResolveRequest) (Result[AccountProjection], error) {
+	return runQuery[AccountProjection](o, func(s snapshot) (AccountProjection, error) {
 		link, ok := s.OAuthLinks[oauthKey(req.Provider, req.ProviderID)]
 		if !ok {
-			return nil, domain("not_found", "OAuth link not found")
+			return zeroValue[AccountProjection](), domain("not_found", "OAuth link not found")
 		}
 		return s.Accounts[link.AccountID], nil
 	})
 }
 
-func (o *owner) oauthUpsert(raw []byte) ([]byte, error) {
-	var req OAuthUpsertRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnOAuthUpsert, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) OauthUpsert(req OAuthUpsertRequest) (Result[OAuthUpsertResult], error) {
+	return runCommand[OAuthUpsertResult](o, FnOAuthUpsert, req.RequestID, req, func(s *snapshot) (OAuthUpsertResult, error) {
 		key := oauthKey(req.Provider, req.ProviderID)
 		if link, ok := s.OAuthLinks[key]; ok {
 			return OAuthUpsertResult{Account: s.Accounts[link.AccountID]}, nil
 		}
 		if blank(req.AccountID) || blank(req.LinkID) || blank(req.Provider) || blank(req.ProviderID) || req.Now <= 0 {
-			return nil, domain("invalid_request", "OAuth identity is incomplete")
+			return zeroValue[OAuthUpsertResult](), domain("invalid_request", "OAuth identity is incomplete")
 		}
 		account := AccountProjection{AccountID: req.AccountID, Email: req.ProviderEmail, CreatedAt: req.Now}
 		s.Accounts[req.AccountID] = account
@@ -945,49 +628,37 @@ func (o *owner) oauthUpsert(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) profileCreate(raw []byte) ([]byte, error) {
-	var req ProfileCreateRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnProfileCreate, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) ProfileCreate(req ProfileCreateRequest) (Result[Profile], error) {
+	return runCommand[Profile](o, FnProfileCreate, req.RequestID, req, func(s *snapshot) (Profile, error) {
 		if _, ok := s.Accounts[req.Profile.AccountID]; !ok {
-			return nil, domain("not_found", "account not found")
+			return zeroValue[Profile](), domain("not_found", "account not found")
 		}
 		if _, ok := s.Profiles[req.Profile.AccountID]; ok {
-			return nil, domain("profile_exists", "Profile already exists for this account")
+			return zeroValue[Profile](), domain("profile_exists", "Profile already exists for this account")
 		}
 		if blank(req.Profile.DisplayName) || req.Profile.CreatedAt <= 0 {
-			return nil, domain("invalid_request", "profile is incomplete")
+			return zeroValue[Profile](), domain("invalid_request", "profile is incomplete")
 		}
 		s.Profiles[req.Profile.AccountID] = req.Profile
 		return req.Profile, nil
 	})
 }
 
-func (o *owner) profileGet(raw []byte) ([]byte, error) {
-	var req ProfileGetRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) ProfileGet(req ProfileGetRequest) (Result[Profile], error) {
+	return runQuery[Profile](o, func(s snapshot) (Profile, error) {
 		value, ok := s.Profiles[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "Profile not found")
+			return zeroValue[Profile](), domain("not_found", "Profile not found")
 		}
 		return value, nil
 	})
 }
 
-func (o *owner) profileUpdate(raw []byte) ([]byte, error) {
-	var req ProfileUpdateRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnProfileUpdate, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) ProfileUpdate(req ProfileUpdateRequest) (Result[Profile], error) {
+	return runCommand[Profile](o, FnProfileUpdate, req.RequestID, req, func(s *snapshot) (Profile, error) {
 		value, ok := s.Profiles[req.AccountID]
 		if !ok {
-			return nil, domain("not_found", "Profile not found")
+			return zeroValue[Profile](), domain("not_found", "Profile not found")
 		}
 		if req.DisplayName != "" {
 			value.DisplayName = req.DisplayName
@@ -1000,14 +671,10 @@ func (o *owner) profileUpdate(raw []byte) ([]byte, error) {
 
 func rateKey(scope, key string) string { return scope + ":" + key }
 
-func (o *owner) rateCheck(raw []byte) ([]byte, error) {
-	var req RateCheckRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnRateCheck, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) RateCheck(req RateCheckRequest) (Result[RateDecision], error) {
+	return runCommand[RateDecision](o, FnRateCheck, req.RequestID, req, func(s *snapshot) (RateDecision, error) {
 		if blank(req.Scope) || blank(req.Key) || req.Now <= 0 || req.WindowMillis <= 0 || req.MaxAttempts <= 0 {
-			return nil, domain("invalid_request", "rate check is incomplete")
+			return zeroValue[RateDecision](), domain("invalid_request", "rate check is incomplete")
 		}
 		key := rateKey(req.Scope, req.Key)
 		record := s.Rates[key]
@@ -1023,50 +690,42 @@ func (o *owner) rateCheck(raw []byte) ([]byte, error) {
 	})
 }
 
-func (o *owner) rateClear(raw []byte) ([]byte, error) {
-	var req RateClearRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnRateClear, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) RateClear(req RateClearRequest) (Result[map[string]any], error) {
+	return runCommand[map[string]any](o, FnRateClear, req.RequestID, req, func(s *snapshot) (map[string]any, error) {
 		delete(s.Rates, rateKey(req.Scope, req.Key))
 		return map[string]any{"cleared": true}, nil
 	})
 }
 
-func (o *owner) legacyImport(raw []byte) ([]byte, error) {
-	var req LegacyImportRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.command(FnLegacyImport, req.RequestID, req, func(s *snapshot) (any, error) {
+func (o *Service) LegacyImport(req LegacyImportRequest) (Result[LegacyImportResult], error) {
+	return runCommand[LegacyImportResult](o, FnLegacyImport, req.RequestID, req, func(s *snapshot) (LegacyImportResult, error) {
 		next := s.clone()
 		for _, account := range req.Accounts {
 			if blank(account.AccountID) || account.CreatedAt <= 0 {
-				return nil, domain("invalid_import", "legacy account is incomplete")
+				return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy account is incomplete")
 			}
 			if prior, ok := next.Accounts[account.AccountID]; ok && prior != account {
-				return nil, domain("import_conflict", "legacy account conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy account conflicts with owner state")
 			}
 			next.Accounts[account.AccountID] = account
 		}
 		for _, row := range req.Native {
 			row.Email = otpscope.NormalizeEmail(row.Email)
 			if blank(row.ID) || blank(row.AccountID) || blank(row.Email) || blank(row.Username) || blank(row.PasswordHash) {
-				return nil, domain("invalid_import", "legacy native credential is incomplete")
+				return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy native credential is incomplete")
 			}
 			value := nativeCredential(row)
 			if prior, ok := next.NativeByEmail[row.Email]; ok && prior != value {
-				return nil, domain("import_conflict", "legacy native email conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy native email conflicts with owner state")
 			}
 			if prior, ok := next.NativeByAccount[row.AccountID]; ok && prior != value {
-				return nil, domain("import_conflict", "legacy account has conflicting native credentials")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy account has conflicting native credentials")
 			}
 			if ownerID, ok := next.Usernames[row.Username]; ok && ownerID != row.AccountID {
-				return nil, domain("import_conflict", "legacy username conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy username conflicts with owner state")
 			}
 			if _, ok := next.Accounts[row.AccountID]; !ok {
-				return nil, domain("invalid_import", "legacy native credential references a missing account")
+				return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy native credential references a missing account")
 			}
 			next.NativeByEmail[row.Email], next.NativeByAccount[row.AccountID], next.Usernames[row.Username] = value, value, row.AccountID
 		}
@@ -1074,10 +733,10 @@ func (o *owner) legacyImport(raw []byte) ([]byte, error) {
 			value := oauthLink(row)
 			key := oauthKey(row.Provider, row.ProviderID)
 			if _, ok := next.Accounts[row.AccountID]; !ok {
-				return nil, domain("invalid_import", "legacy OAuth link references a missing account")
+				return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy OAuth link references a missing account")
 			}
 			if prior, ok := next.OAuthLinks[key]; ok && prior != value {
-				return nil, domain("import_conflict", "legacy OAuth link conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy OAuth link conflicts with owner state")
 			}
 			next.OAuthLinks[key] = value
 		}
@@ -1086,20 +745,20 @@ func (o *owner) legacyImport(raw []byte) ([]byte, error) {
 			value := otpRecord{ID: row.ID, Email: row.Email, CodeHash: o.otpKeys.CodeMAC(row.ID, row.Email, row.Code, row.Type), Type: row.Type, ExpiresAt: row.ExpiresAt, AccountID: row.AccountID}
 			if row.AccountID != "" {
 				if _, ok := next.Accounts[row.AccountID]; !ok {
-					return nil, domain("invalid_import", "legacy OTP references a missing account")
+					return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy OTP references a missing account")
 				}
 			}
 			if prior, ok := next.OTPs[row.ID]; ok && prior != value {
-				return nil, domain("import_conflict", "legacy OTP conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy OTP conflicts with owner state")
 			}
 			next.OTPs[row.ID] = value
 		}
 		for _, profile := range req.Profiles {
 			if _, ok := next.Accounts[profile.AccountID]; !ok {
-				return nil, domain("invalid_import", "legacy profile references a missing account")
+				return zeroValue[LegacyImportResult](), domain("invalid_import", "legacy profile references a missing account")
 			}
 			if prior, ok := next.Profiles[profile.AccountID]; ok && prior != profile {
-				return nil, domain("import_conflict", "legacy profile conflicts with owner state")
+				return zeroValue[LegacyImportResult](), domain("import_conflict", "legacy profile conflicts with owner state")
 			}
 			next.Profiles[profile.AccountID] = profile
 		}
@@ -1108,21 +767,15 @@ func (o *owner) legacyImport(raw []byte) ([]byte, error) {
 	})
 }
 
-const effectOwner = "auth-identity"
-
 const FnEffectsCheckDelivery = "auth.identity.effects.native.check-delivery"
 
-func (o *owner) effectsCheckDelivery(raw []byte) ([]byte, error) {
-	var lease effect.Lease
-	if err := decode(raw, &lease); err != nil {
-		return nil, err
-	}
-	return o.query(func(s snapshot) (any, error) {
+func (o *Service) EffectsCheckDelivery(lease notification.Lease) (Result[bool], error) {
+	return runQuery[bool](o, func(s snapshot) (bool, error) {
 		now := time.Now().UnixMilli()
-		record, ok := s.Effects[lease.Intent.ID]
+		record, ok := s.Effects[lease.Message.ID]
 		if !ok || record.Lease == nil || record.Lease.LeaseID != lease.LeaseID ||
 			record.Lease.ConsumerID != lease.ConsumerID || record.Lease.LeasedUntilUnixMilli <= now ||
-			record.Status != string(effect.Pending) || !reflect.DeepEqual(record.Intent, lease.Intent) ||
+			record.Status != string(notification.Pending) || !reflect.DeepEqual(record.Message, lease.Message) ||
 			!legacyNotificationEffectHasLiveOTP(&s, record, now) {
 			return false, nil
 		}
@@ -1140,7 +793,7 @@ func legacyNotificationEffectHasLiveOTP(s *snapshot, record ownerEffect, now int
 		return record.ExpiresAt > now
 	}
 	var payload notificationEmailPayload
-	if err := msgpack.Unmarshal(record.Intent.Payload, &payload); err != nil || payload.To == "" {
+	if err := msgpack.Unmarshal(record.Message.Ciphertext, &payload); err != nil || payload.To == "" {
 		return false
 	}
 	for _, otp := range s.OTPs {
@@ -1152,7 +805,7 @@ func legacyNotificationEffectHasLiveOTP(s *snapshot, record ownerEffect, now int
 }
 
 func verificationDeliveryAllowed(s *snapshot, record ownerEffect, now int64) bool {
-	fact, ok := s.VerificationFactsV2[record.Intent.ID]
+	fact, ok := s.VerificationFactsV2[record.Message.ID]
 	if !ok {
 		return true
 	}
@@ -1160,13 +813,9 @@ func verificationDeliveryAllowed(s *snapshot, record ownerEffect, now int64) boo
 	return err == nil && active
 }
 
-func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
-	var req effect.ClaimRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	if err := req.Validate(); err != nil || req.Owner != effectOwner {
-		return nil, fmt.Errorf("invalid identity effect claim")
+func (o *Service) EffectsClaim(req notification.ClaimRequest) (notification.ClaimResult, error) {
+	if err := req.Validate(); err != nil {
+		return zeroValue[notification.ClaimResult](), fmt.Errorf("invalid identity effect claim")
 	}
 	now := time.Now().UTC().UnixMilli()
 	// Idle polling is observational, not a domain command. Persisting every
@@ -1182,13 +831,13 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 	_, current, _, err := o.store.LoadCommand(context.Background(), "", "")
 	if err != nil {
 		o.mu.Unlock()
-		return nil, fmt.Errorf("refresh %s: %w", FnEffectsClaim, err)
+		return zeroValue[notification.ClaimResult](), fmt.Errorf("refresh %s: %w", FnEffectsClaim, err)
 	}
 	normalizeSnapshot(&current)
 	o.state = current
 	hasClaimable := false
 	for _, record := range o.state.Effects {
-		if record.Status == string(effect.Pending) && record.AvailableAt <= now &&
+		if record.Status == string(notification.Pending) && record.AvailableAt <= now &&
 			(record.Lease == nil || record.Lease.LeasedUntilUnixMilli <= now) &&
 			((record.ExpiresAt > 0 && record.ExpiresAt <= now) || verificationDeliveryAllowed(&o.state, record, now)) {
 			hasClaimable = true
@@ -1197,27 +846,26 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 	}
 	o.mu.Unlock()
 	if !hasClaimable {
-		return msgpack.Marshal(effect.ClaimResult{
-			Version: effect.OutboxVersionV1, Owner: effectOwner,
-			ConsumerID: req.ConsumerID, Leases: []effect.Lease{},
-		})
+		return notification.ClaimResult{
+			ConsumerID: req.ConsumerID, Leases: []notification.Lease{},
+		}, nil
 	}
 	requestID := fmt.Sprintf("%s:%d", req.ConsumerID, time.Now().UTC().UnixNano())
-	return o.commandRaw(FnEffectsClaim, requestID, req, func(s *snapshot) (any, error) {
+	return runRawCommand[notification.ClaimResult](o, FnEffectsClaim, requestID, req, func(s *snapshot) (notification.ClaimResult, error) {
 		pruneExpiredVerificationState(s, now)
 		ids := make([]string, 0, len(s.Effects))
 		for id := range s.Effects {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		leases := []effect.Lease{}
+		leases := []notification.Lease{}
 		for _, id := range ids {
 			record := s.Effects[id]
 			if !legacyNotificationEffectHasLiveOTP(s, record, now) {
 				delete(s.Effects, id)
 				continue
 			}
-			if record.Status != string(effect.Pending) || record.AvailableAt > now || (record.Lease != nil && record.Lease.LeasedUntilUnixMilli > now) {
+			if record.Status != string(notification.Pending) || record.AvailableAt > now || (record.Lease != nil && record.Lease.LeasedUntilUnixMilli > now) {
 				continue
 			}
 			if !verificationDeliveryAllowed(s, record, now) {
@@ -1225,64 +873,56 @@ func (o *owner) effectsClaim(raw []byte) ([]byte, error) {
 			}
 			attempt := record.Attempts + 1
 			until := now + req.LeaseDurationMillis
-			lease := effect.Lease{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: leaseToken(id, req.ConsumerID, until, attempt), Attempt: attempt, LeasedUntilUnixMilli: until, Intent: record.Intent}
+			lease := notification.Lease{ConsumerID: req.ConsumerID, LeaseID: leaseToken(id, req.ConsumerID, until, attempt), Attempt: attempt, LeasedUntilUnixMilli: until, Message: record.Message.Clone()}
 			record.Lease = &lease
 			record.Attempts = attempt
 			s.Effects[id] = record
-			leases = append(leases, lease)
+			leases = append(leases, lease.Clone())
 			if uint32(len(leases)) == req.Limit {
 				break
 			}
 		}
-		return effect.ClaimResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, Leases: leases}, nil
+		return notification.ClaimResult{ConsumerID: req.ConsumerID, Leases: leases}, nil
 	})
 }
 
-func (o *owner) effectsAck(raw []byte) ([]byte, error) {
-	var req effect.AcknowledgeRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.commandRaw(FnEffectsAck, "ack:"+req.LeaseID, req, func(s *snapshot) (any, error) {
+func (o *Service) EffectsAck(req notification.AcknowledgeRequest) (notification.SettlementResult, error) {
+	return runRawCommand[notification.SettlementResult](o, FnEffectsAck, "ack:"+req.LeaseID, req, func(s *snapshot) (notification.SettlementResult, error) {
 		for id, record := range s.Effects {
 			if record.Lease == nil || record.Lease.LeaseID != req.LeaseID {
 				continue
 			}
 			if err := req.ValidateFor(*record.Lease); err != nil {
-				return nil, err
+				return zeroValue[notification.SettlementResult](), err
 			}
 			record.Receipt, record.LastLeaseID, record.LastConsumerID, record.Lease = &req.Receipt, req.LeaseID, req.ConsumerID, nil
 			record.Status = string(req.Receipt.Status)
 			s.Effects[id] = record
-			return effect.SettlementResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
+			return notification.SettlementResult{ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
 		}
 		for _, record := range s.Effects {
 			if record.LastLeaseID == req.LeaseID && record.LastConsumerID == req.ConsumerID && record.Receipt != nil && reflect.DeepEqual(*record.Receipt, req.Receipt) {
-				return effect.SettlementResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
+				return notification.SettlementResult{ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
 			}
 		}
-		return effect.SettlementResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: req.LeaseID}, nil
+		return notification.SettlementResult{ConsumerID: req.ConsumerID, LeaseID: req.LeaseID}, nil
 	})
 }
 
-func (o *owner) effectsRetry(raw []byte) ([]byte, error) {
-	var req effect.RetryRequest
-	if err := decode(raw, &req); err != nil {
-		return nil, err
-	}
-	return o.commandRaw(FnEffectsRetry, "retry:"+req.LeaseID, req, func(s *snapshot) (any, error) {
+func (o *Service) EffectsRetry(req notification.RetryRequest) (notification.SettlementResult, error) {
+	return runRawCommand[notification.SettlementResult](o, FnEffectsRetry, "retry:"+req.LeaseID, req, func(s *snapshot) (notification.SettlementResult, error) {
 		for id, record := range s.Effects {
 			if record.Lease == nil || record.Lease.LeaseID != req.LeaseID {
 				continue
 			}
 			if err := req.ValidateFor(*record.Lease); err != nil {
-				return nil, err
+				return zeroValue[notification.SettlementResult](), err
 			}
 			record.AvailableAt, record.LastLeaseID, record.LastConsumerID, record.Lease = req.RetryAtUnixMilli, req.LeaseID, req.ConsumerID, nil
 			s.Effects[id] = record
-			return effect.SettlementResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
+			return notification.SettlementResult{ConsumerID: req.ConsumerID, LeaseID: req.LeaseID, Settled: true}, nil
 		}
-		return effect.SettlementResult{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: req.ConsumerID, LeaseID: req.LeaseID}, nil
+		return notification.SettlementResult{ConsumerID: req.ConsumerID, LeaseID: req.LeaseID}, nil
 	})
 }
 
@@ -1293,13 +933,3 @@ func failure[T any](code, message string) Result[T] {
 	return Result[T]{Version: ContractVersion, Error: &Error{Code: code, Message: message}}
 }
 func blank(value string) bool { return strings.TrimSpace(value) == "" }
-func decode(raw []byte, value any) error {
-	if len(raw) == 0 {
-		return fmt.Errorf("empty request")
-	}
-	if err := msgpack.Unmarshal(raw, value); err != nil {
-		return fmt.Errorf("decode request: %w", err)
-	}
-	return nil
-}
-func encode(value any) ([]byte, error) { return msgpack.Marshal(value) }

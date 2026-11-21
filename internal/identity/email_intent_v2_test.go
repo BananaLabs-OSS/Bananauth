@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -20,7 +20,7 @@ func TestConsumedSignupIsHeldBeforeAndAfterClaim(t *testing.T) {
 		if result := issueV2(t, owner, "signup", "signup", email, now); !result.OK || !result.Value.EffectQueued {
 			t.Fatal(result)
 		}
-		request, err := effect.NewClaimRequest(effectOwner, "worker", 1, 30_000)
+		request, err := notification.NewClaimRequest("worker", 1, 30_000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -28,19 +28,19 @@ func TestConsumedSignupIsHeldBeforeAndAfterClaim(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		claim := func() []effect.Lease {
+		claim := func() []notification.Lease {
 			t.Helper()
 			wire, err := worker.effectsClaim(requestWire)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var result effect.ClaimResult
+			var result notification.ClaimResult
 			if err := msgpack.Unmarshal(wire, &result); err != nil {
 				t.Fatal(err)
 			}
 			return result.Leases
 		}
-		var lease effect.Lease
+		var lease notification.Lease
 		if claimFirst {
 			leases := claim()
 			if len(leases) != 1 {
@@ -123,10 +123,9 @@ func TestEmailIntentV2SignupOnlyOwnFactAndSingleUse(t *testing.T) {
 }
 func TestEmailIntentV2LegacyCannotBecomeSignup(t *testing.T) {
 	o := newTestOwner(t, &memoryEventStore{})
-	r := callResult[EmailVerificationIssueResult](t, o.emailVerificationIssue, EmailVerificationIssueRequest{RequestID: "legacy", VerificationID: "legacy-otp", EffectID: "legacy-effect", Email: "legacy@example.test", Code: "123456", Now: 1000, ExpiresAt: 61000})
-	if !r.OK || !r.Value.EffectQueued {
-		t.Fatal(r)
-	}
+	o.state.OTPs["legacy-otp"] = otpRecord{ID: "legacy-otp", Email: "legacy@example.test", Code: "123456", Type: "sessions_email_verification", ExpiresAt: 61000}
+	store := o.store.(*memoryEventStore)
+	store.records = append(store.records, durableRecord{Snapshot: o.state})
 	if consumeV2(t, o, "signup", "new-consume", "legacy@example.test", 1001).OK {
 		t.Fatal("legacy code upgraded to signup")
 	}
@@ -134,10 +133,7 @@ func TestEmailIntentV2LegacyCannotBecomeSignup(t *testing.T) {
 	if f.OK {
 		t.Fatal("invented legacy signup fact")
 	}
-	old := callResult[EmailVerificationConsumeResult](t, o.emailVerificationConsume, EmailVerificationConsumeRequest{RequestID: "legacy-consume", AccountID: "legacy-account", Email: "legacy@example.test", Code: "123456", Now: 1002})
-	if !old.OK {
-		t.Fatal("V1 compatibility broken", old)
-	}
+
 }
 func TestEmailIntentV2ExistingNativeMembershipLoginAndStaleBinding(t *testing.T) {
 	store := &memoryEventStore{}
@@ -262,12 +258,12 @@ func TestEmailIntentV2OriginalIntentHashCannotBeLaundered(t *testing.T) {
 	o := newTestOwner(t, &memoryEventStore{})
 	issueV2(t, o, "signup", "signup", "new@example.test", 1000)
 	before := callResult[EmailVerificationFactV2](t, o.emailVerificationFactGetV2, EmailVerificationFactRequestV2{EffectID: "signup-effect", Email: "new@example.test", Now: 1001})
-	if !before.OK || !before.Value.Active || before.Value.IntentVersion == "" || before.Value.IntentKind == "" || before.Value.IntentIdempotencyKey != "signup-effect" || len(before.Value.EncryptedPayloadSHA256) != 64 {
+	if !before.OK || !before.Value.Active || before.Value.MessageIdempotencyKey != "signup-effect" || len(before.Value.EncryptedPayloadSHA256) != 64 {
 		t.Fatal(before)
 	}
 	_, err := o.command("test-only-effect-tamper", "tamper", true, func(s *snapshot) (any, error) {
 		record := s.Effects["signup-effect"]
-		record.Intent.Payload = append(append([]byte(nil), record.Intent.Payload...), 0)
+		record.Message.Ciphertext = append(append([]byte(nil), record.Message.Ciphertext...), 0)
 		s.Effects["signup-effect"] = record
 		return true, nil
 	})

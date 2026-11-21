@@ -1,5 +1,5 @@
 // Package authvalidate implements Bananauth's platform-neutral request
-// validation subset. It has no Pulp, HTTP, storage, or WASI dependency.
+// validation subset. It has no HTTP or storage dependency.
 package authvalidate
 
 import (

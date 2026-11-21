@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	identitysvc "github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/google/uuid"
 )
@@ -26,13 +27,7 @@ func (h *OAuthHandler) discordAuthorizeComposed(w http.ResponseWriter, r *http.R
 		return
 	}
 	now := time.Now().UTC()
-	result, err := callIdentity[map[string]any](h.identity, identityOAuthStateIssueEvent, map[string]any{
-		"request_id": identityRequestID("oauth-state-issue"),
-		"state": map[string]any{
-			"state": state, "provider": "discord", "redirect_binding": h.redirectBinding,
-			"expires_at": now.Add(10 * time.Minute).UnixMilli(),
-		},
-	})
+	result, err := h.identity.OauthStateIssue(identitysvc.OAuthStateIssueRequest{RequestID: identityRequestID("oauth-state-issue"), State: identitysvc.OAuthState{State: state, Provider: "discord", RedirectBinding: h.redirectBinding, ExpiresAt: now.Add(10 * time.Minute).UnixMilli()}})
 	if err != nil || !result.OK {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "state_error"})
 		return
@@ -44,10 +39,7 @@ func (h *OAuthHandler) discordAuthorizeComposed(w http.ResponseWriter, r *http.R
 
 func (h *OAuthHandler) discordCallbackComposed(w http.ResponseWriter, r *http.Request) {
 	code, state := r.URL.Query().Get("code"), r.URL.Query().Get("state")
-	consumed, err := callIdentity[map[string]any](h.identity, identityOAuthStateConsumeEvent, map[string]any{
-		"request_id": identityRequestID("oauth-state-consume"), "state": state,
-		"provider": "discord", "redirect_binding": h.redirectBinding, "now": time.Now().UTC().UnixMilli(),
-	})
+	consumed, err := h.identity.OauthStateConsume(identitysvc.OAuthStateConsumeRequest{RequestID: identityRequestID("oauth-state-consume"), State: state, Provider: "discord", RedirectBinding: h.redirectBinding, Now: time.Now().UTC().UnixMilli()})
 	if err != nil || !consumed.OK {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_state", Message: "OAuth state mismatch or expired"})
 		return
@@ -58,11 +50,7 @@ func (h *OAuthHandler) discordCallbackComposed(w http.ResponseWriter, r *http.Re
 		return
 	}
 	accountID, linkID := uuid.NewString(), uuid.NewString()
-	result, err := callIdentity[oauthUpsertResult](h.identity, identityOAuthUpsertEvent, map[string]any{
-		"request_id": identityRequestID("oauth-upsert"), "account_id": accountID, "link_id": linkID,
-		"provider": "discord", "provider_id": identity.ID, "provider_email": identity.Email,
-		"now": time.Now().UTC().UnixMilli(),
-	})
+	result, err := h.identity.OauthUpsert(identitysvc.OAuthUpsertRequest{RequestID: identityRequestID("oauth-upsert"), AccountID: accountID, LinkID: linkID, Provider: "discord", ProviderID: identity.ID, ProviderEmail: identity.Email, Now: time.Now().UTC().UnixMilli()})
 	if err != nil || !result.OK {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "creation_failed"})
 		return
@@ -90,7 +78,7 @@ type discordProvider struct {
 }
 
 type OAuthHandler struct {
-	identity        sessionDispatcher
+	identity        *identitysvc.Service
 	sessions        *SessionManager
 	redirectBinding string
 	discord         *discordProvider

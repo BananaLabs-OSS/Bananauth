@@ -2,22 +2,18 @@ package identity
 
 import (
 	"fmt"
-	"github.com/bananalabs-oss/bananauth/internal/effect"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"time"
 )
 
-func (o *owner) observeConsumer(input []byte) ([]byte, error) {
-	var req effect.ObserveConsumerRequest
-	if err := decode(input, &req); err != nil {
-		return nil, err
+func (o *Service) ObserveConsumer(req notification.ObserveConsumerRequest) (Result[notification.ConsumerObservation], error) {
+	if err := req.Validate(); err != nil {
+		return Result[notification.ConsumerObservation]{}, fmt.Errorf("invalid auth identity observation")
 	}
-	if err := req.Validate(); err != nil || req.Owner != effectOwner {
-		return nil, fmt.Errorf("invalid auth identity observation")
-	}
-	return o.query(func(s snapshot) (any, error) {
-		v := effect.ConsumerObservation{Version: effect.OutboxVersionV1, Owner: effectOwner, AtMillis: time.Now().UnixMilli()}
+	return runQuery[notification.ConsumerObservation](o, func(s snapshot) (notification.ConsumerObservation, error) {
+		v := notification.ConsumerObservation{AtMillis: time.Now().UnixMilli()}
 		for _, record := range s.Effects {
-			if record.Status == string(effect.Pending) && record.Lease != nil && record.Lease.ConsumerID == req.ConsumerID {
+			if record.Status == string(notification.Pending) && record.Lease != nil && record.Lease.ConsumerID == req.ConsumerID {
 				v.Leased++
 				if record.Lease.LeasedUntilUnixMilli <= v.AtMillis {
 					v.Overdue++

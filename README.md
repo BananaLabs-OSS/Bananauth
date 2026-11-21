@@ -150,13 +150,15 @@ connection URLs. For PostgreSQL, preserve the schema selection used by each
 owner in its connection URL. For SQLite, rehearse against consistent copies
 of the two existing owner files before opening deployed data.
 
-Keep the current `JWT_SECRET` and OTP keyring for a handoff so existing
-session tokens and encrypted delivery intents can still be read. The native
-service reads `BANANAUTH_OTP_KEY_CURRENT` and `BANANAUTH_OTP_KEY_PREVIOUS`
-and accepts the existing `BANANAAUTH_OTP_KEY_CURRENT` and
-`BANANAAUTH_OTP_KEY_PREVIOUS` aliases. The Discord settings also accept
-the previous `PULP_OAUTH_DISCORD_*` names. Configure `LISTEN_ADDR` when
-running the binary directly to select the listener.
+Preserve the OTP keyring for existing encrypted delivery data. The only accepted
+key settings are `BANANAUTH_OTP_KEY_CURRENT` and `BANANAUTH_OTP_KEY_PREVIOUS`.
+Discord uses `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URL`.
+Configure `LISTEN_ADDR` to select the listener.
+
+JWTs now use the canonical issuer `bananauth`, with strict issuer, audience, expiry,
+and signing-method verification. Tokens with the previous issuer are rejected;
+a future authorized cutover requires those clients to log in again. No deployment
+or user-session change has been performed by this local refactor.
 
 For a Sessions handoff, set `BANANAUTH_VERIFICATION_REPLAY_KEY` to the
 legacy backend's verification request key (its internal service secret).
@@ -215,3 +217,15 @@ match the destination server. Session-owner state, existing delivery/effect
 journals, and pending workflow receipts require their own consistent backups;
 this account import does not migrate them. Never point the importer at an active
 writer during a cutover rehearsal.
+
+## Offline encrypted-notification store conversion
+
+Historical database conversion is maintained separately from the active service.
+Use the preserved offline converter source archive when migrating an older installation; fresh installs require no conversion.
+
+The runtime rejects historical notification records until this conversion completes.
+Ciphertext, authenticated message IDs, idempotency keys, account credentials, and
+outstanding leases remain intact. Old framework headers are not runtime aliases.
+A live unbound generic verification fails closed for explicit offline reconciliation.
+Only synthetic fixture conversion is currently qualified; this is not proof of a
+production authentication snapshot or permission to activate delivery.

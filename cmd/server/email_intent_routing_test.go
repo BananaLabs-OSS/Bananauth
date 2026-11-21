@@ -1,15 +1,54 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"github.com/bananalabs-oss/bananauth/internal/identity"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
+	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
-func TestEmailIntentHTTPV2UsesOnlyFixedProviders(t *testing.T) {
-	for _, v := range []struct {
-		intent, issue, consume string
-		ok                     bool
-	}{{"login", "bananauth.identity.email-login.issue.v2", "bananauth.identity.email-login.consume.v2", true}, {"", "bananauth.identity.email-login.issue.v2", "bananauth.identity.email-login.consume.v2", true}, {"signup", "bananauth.identity.email-signup.issue.v2", "bananauth.identity.email-signup.consume.v2", true}, {"broadcast", "", "", false}, {"email_change", "", "", false}, {"Signup", "", "", false}} {
-		issue, consume, ok := emailIntentEventsV2(v.intent)
-		if issue != v.issue || consume != v.consume || ok != v.ok {
-			t.Fatalf("intent%q map changed", v.intent)
-		}
+func TestEmailIntentHTTPUsesStrictTypedServices(t *testing.T) {
+	for _, intent := range []string{"", "login", "signup", "broadcast", "email_change", "Signup"} {
+		t.Run("intent="+intent, func(t *testing.T) {
+			keys, _ := otpsecure.Parse(strings.Repeat("k", 32), "")
+			service, closer, err := identity.Open(context.Background(), filepath.Join(t.TempDir(), "identity.db"), keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closer.Close()
+			valid := intent == "" || intent == "login" || intent == "signup"
+			if intent != "signup" && valid {
+				result, err := service.NativeRegister(identity.NativeRegisterRequest{RequestID: "register", AccountID: "account", CredentialID: "credential", Email: "member@example.test", Username: "member", Password: "fixture-password", Now: 100})
+				if err != nil || !result.OK {
+					t.Fatal(result, err)
+				}
+			}
+			handler := AuthHandler{identity: service}
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("POST", "/auth/email-verification", strings.NewReader(`{"email":"member@example.test","intent":"`+intent+`"}`))
+			handler.IssueEmailVerificationV2(w, r)
+			want := 400
+			if valid {
+				want = 202
+			}
+			if w.Code != want {
+				t.Fatalf("status %d want %d: %s", w.Code, want, w.Body)
+			}
+			claim, err := service.EffectsClaim(notification.ClaimRequest{ConsumerID: "fixture-worker", Limit: 2, LeaseDurationMillis: 1000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			if valid {
+				count = 1
+			}
+			if len(claim.Leases) != count {
+				t.Fatalf("queued %d notifications want %d", len(claim.Leases), count)
+			}
+		})
 	}
 }

@@ -7,8 +7,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// These values are part of the existing browser token contract.
-const issuer = "github.com/BananaLabs-OSS/Pulp-ext-jwt"
+// The application validates one canonical issuer and a fixed browser audience.
+const issuer = "bananauth"
 const audience = "identity.jwt.hs256"
 
 type Key []byte

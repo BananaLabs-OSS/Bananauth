@@ -1,26 +1,33 @@
-# Canonical email authentication API
+# Canonical authentication API
 
-Use the unversioned strict-intent endpoints:
+Public JSON routes are `POST /auth/email-verification`,
+`POST /auth/email-verification/consume`, and
+`POST /auth/email-verification/session`. Login is the default intent; signup is
+explicit. Unknown-account login never creates an account. Existing request IDs,
+intent-bound durable keys, and strict OTP/session replay rules remain unchanged.
+The retired versioned public routes and private completion alias return404.
 
-- `POST /auth/email-verification`
-- `POST /auth/email-verification/consume`
-- `POST /auth/email-verification/session`
-- Private workflow: `/internal/browser/email/complete`
+## Private JSON services
 
-Login uses `intent: "login"` (the public default), and signup uses
-`intent: "signup"`. Unknown-account login does not create an account. Browser
-and mobile session creation preserve the existing request identity, intent-bound
-consume purpose, durable provider contract versions and replay behavior.
-The retired `/auth/email-verification/v2*` and
-`/internal/browser/email/v2/complete` routes return404.
+All private requests require the separately configured service bearer credential.
+They accept one bounded JSON object with snake_case typed fields. Duplicate or
+unknown fields are rejected. Successful identity operations return the domain value
+directly; errors use HTTP400/401/404/409/503 and `{error, message?}`. There is no
+provider version/ok/value envelope.
 
-The canonical routes replace the earlier unversioned legacy HTTP handlers as
-well as the versioned strict routes. Callers must use the strict intent payload;
-there is no fallback from a rejected strict request to legacy account creation.
-Internal durable owner readers and old state identifiers remain available for
-compatibility. This HTTP migration does not rename queues or reset databases.
+- `/internal/identity/accounts/lookup`: `{account_id}` or `{email}` to account.
+- `/internal/identity/holds/acquire` and `/release`: exact request/account/hold/reason/acquisition IDs; no caller clock or expiry.
+- `/internal/identity/leases/create`, `/renew`, `/release`, and `/retention/eligibility`: existing typed retention fields.
+- `/internal/browser/session/resolve`: `{credential}` to account/session IDs, expiry, email, verified email and assurance.
+- `/internal/browser/session/logout`: `{credential}` to `{ok:true}`.
+- `/internal/browser/email/complete`: `{request_id,email,code,intent?}` to token, account/session IDs and expiry.
+- `/internal/browser/email/login/issue`, `/login/consume`, `/signup/issue`, `/signup/consume`, and `/fact`: typed strict verification fields.
+- `/internal/erasure/accounts/lookup`, `/retention/eligibility`, `/accounts/delete`, `/accounts/erase`, and `/receipts/lookup`: separately authorized typed erasure operations.
 
-The Sessions/mobile caller and ingress changes are coordinated in the Evolution
-task. Local parity includes native email/session replay tests, retired-route404
-checks, focused caller tests and the staged native preflight. Existing rollback
-releases are preserved; no deployment is performed by this migration.
+Generic private email issue/consume and the old versioned completion path are absent.
+Internal services call Go methods directly. Storage encodings and their explicit
+conversion are separate from HTTP; no retired provider protocol runs in the server.
+
+The canonical JWT issuer is `bananauth`; old-issuer tokens require login after a
+future authorized cutover. SQL account/session history is retained. Keep email
+and all external activation disabled during local qualification.

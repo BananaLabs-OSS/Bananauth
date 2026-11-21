@@ -1,9 +1,8 @@
 package browser
 
 import (
-	"bytes"
 	"errors"
-	"github.com/vmihailenco/msgpack/v5"
+
 	"testing"
 	"time"
 )
@@ -54,7 +53,7 @@ func TestResolveRejectsPartialOrImpossibleSessionEmailAssurance(t *testing.T) {
 	}
 }
 
-func TestResolveNegativeWireRetainsExactThreeFieldContract(t *testing.T) {
+func TestResolveDeniedTypedResultHasNoPrincipalOrAssurance(t *testing.T) {
 	for _, tc := range []struct {
 		name, code string
 		prepare    func(*resolver)
@@ -83,29 +82,20 @@ func TestResolveNegativeWireRetainsExactThreeFieldContract(t *testing.T) {
 			if tc.prepare != nil {
 				tc.prepare(&r)
 			}
-			input, err := msgpack.Marshal(validRequest())
-			if err != nil {
-				t.Fatal(err)
-			}
+			request := validRequest()
 			if tc.malformed {
-				input = []byte{0x80}
+				request = ResolveRequest{}
 			}
-			wire, err := r.resolve(input)
-			if err != nil {
-				t.Fatal(err)
+			result := r.resolveRequest(request)
+			if result.OK || result.Error != tc.code || result.AccountID != "" || result.SessionID != "" || result.Email != "" || result.VerifiedEmail != "" || result.EmailVerified {
+				t.Fatalf("denied result leaked principal or assurance: %+v", result)
 			}
-			var fields map[string]any
-			if msgpack.Unmarshal(wire, &fields) != nil || len(fields) != 3 || fields["version"] != ContractVersion || fields["ok"] != false || fields["error"] != tc.code {
-				t.Fatalf("negative wire changed: %#v", fields)
-			}
-			if _, exists := fields["email_verified"]; exists {
-				t.Fatal("failure must not carry session assurance")
-			}
+
 		})
 	}
 }
 
-func TestResolvePositiveWirePreservesExplicitAssuranceSchemas(t *testing.T) {
+func TestResolvePositiveTypedResultPreservesAssurance(t *testing.T) {
 	for _, assured := range []bool{false, true} {
 		r := validResolver()
 		if assured {
@@ -120,32 +110,16 @@ func TestResolvePositiveWirePreservesExplicitAssuranceSchemas(t *testing.T) {
 				return v, e
 			}
 		}
-		input, err := msgpack.Marshal(validRequest())
-		if err != nil {
-			t.Fatal(err)
+		result := r.resolveRequest(validRequest())
+		if !result.OK || result.EmailVerified != assured {
+			t.Fatalf("positive assurance changed: %+v", result)
 		}
-		result := r.resolveValue(input)
-		if !result.OK {
-			t.Fatal("positive fixture denied")
+		if assured && result.VerifiedEmail != "verified@example.test" {
+			t.Fatal("verified email missing")
 		}
-		expected, err := msgpack.Marshal(result)
-		if err != nil {
-			t.Fatal(err)
+		if !assured && result.VerifiedEmail != "" {
+			t.Fatal("ordinary session manufactured assurance")
 		}
-		wire, err := r.resolve(input)
-		if err != nil || !bytes.Equal(wire, expected) {
-			t.Fatal("positive receipt bytes changed")
-		}
-		var fields map[string]any
-		if msgpack.Unmarshal(wire, &fields) != nil {
-			t.Fatal("positive receipt decode")
-		}
-		want := 8
-		if assured {
-			want = 9
-		}
-		if len(fields) != want || fields["email_verified"] != assured {
-			t.Fatalf("positive schema changed: %#v", fields)
-		}
+
 	}
 }

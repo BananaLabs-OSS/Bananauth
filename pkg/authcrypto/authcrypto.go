@@ -1,5 +1,5 @@
 // Package authcrypto holds the pure cryptographic primitives shared between
-// the native server (internal/*) and the WASM cell (pulp-cell/*). It has no
+// the native authentication service. It has no
 // platform-specific imports — only stdlib — so both build targets compile it
 // unchanged.
 package authcrypto

@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"github.com/bananalabs-oss/bananauth/internal/browser"
+	identitysvc "github.com/bananalabs-oss/bananauth/internal/identity"
+	"github.com/bananalabs-oss/bananauth/internal/session"
+
 	"net"
 	"net/http"
 	"strings"
@@ -15,12 +18,12 @@ type errorResponse struct {
 	Message string `json:"message,omitempty"`
 }
 type AuthHandler struct {
-	identity              sessionDispatcher
-	completeV2            func([]byte) ([]byte, error)
+	identity              *identitysvc.Service
+	completeV2            func(browser.CompleteEmailVerificationRequestV2) browser.CompleteEmailVerificationResult
 	sessions              *SessionManager
 	verificationReplayKey []byte
 }
-type ProfileHandler struct{ identity sessionDispatcher }
+type ProfileHandler struct{ identity *identitysvc.Service }
 type authenticatedAccount struct{ account, session string }
 type authContextKey struct{}
 
@@ -69,24 +72,13 @@ func (m *SessionManager) protect(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func registerAccountRoutes(mux *http.ServeMux, identities, sessions map[string]func([]byte) ([]byte, error), manager *SessionManager, discord *discordProvider, completeV2 func([]byte) ([]byte, error), replayKey []byte) {
-	identityCall := dispatchIdentity(identities)
-	sessionNames := map[string]string{
-		sessionCreatedEvent: "auth.session.v1.create", sessionCreatedOwnedEvent: "auth.session.v1.create-owned",
-		sessionVerifiedEvent: "auth.session.v1.get", sessionRevokedOwnedEvent: "auth.session.v1.revoke-owned",
-	}
-	manager.dispatch = func(event string, wire []byte) ([]byte, error) {
-		execute := sessions[sessionNames[event]]
-		if execute == nil {
-			return nil, fmt.Errorf("unknown session operation %q", event)
-		}
-		return execute(wire)
-	}
-	auth := &AuthHandler{identity: identityCall, sessions: manager, completeV2: completeV2, verificationReplayKey: replayKey}
-	profiles := &ProfileHandler{identity: identityCall}
+func registerAccountRoutes(mux *http.ServeMux, identities *identitysvc.Service, sessions *session.Service, manager *SessionManager, discord *discordProvider, completeV2 func(browser.CompleteEmailVerificationRequestV2) browser.CompleteEmailVerificationResult, replayKey []byte) {
+	manager.service = sessions
+	auth := &AuthHandler{identity: identities, sessions: manager, completeV2: completeV2, verificationReplayKey: replayKey}
+	profiles := &ProfileHandler{identity: identities}
 	methods := []string{"password"}
 	if discord != nil {
-		oauth := &OAuthHandler{identity: identityCall, sessions: manager, redirectBinding: discord.redirectURL, discord: discord}
+		oauth := &OAuthHandler{identity: identities, sessions: manager, redirectBinding: discord.redirectURL, discord: discord}
 		mux.HandleFunc("GET /auth/oauth/discord", oauth.discordAuthorizeComposed)
 		mux.HandleFunc("GET /auth/oauth/discord/callback", oauth.discordCallbackComposed)
 		methods = append(methods, "discord")

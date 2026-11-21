@@ -78,7 +78,7 @@ func TestRetentionHoldDurableAcquisitionFenceAndReplay(t *testing.T) {
 	registerHoldAccount(t, o)
 	acquire := holdRequest("acquire-a", "a")
 	raw, _ := msgpack.Marshal(acquire)
-	first, err := o.providers()[FnRetentionHoldAcquire](raw)
+	first, err := o.retentionHoldAcquire(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestRetentionHoldsRejectExpiryAndMalformedAuthority(t *testing.T) {
 	}
 }
 
-func TestRetentionHoldsLegacySnapshotAndNativeProviders(t *testing.T) {
+func TestRetentionHoldsOldDataNormalizationAndTypedService(t *testing.T) {
 	legacy := newSnapshot()
 	legacy.RetentionHolds = nil
 	normalizeSnapshot(&legacy)
@@ -278,11 +278,14 @@ func TestRetentionHoldsLegacySnapshotAndNativeProviders(t *testing.T) {
 		t.Fatal("old snapshot not normalized")
 	}
 	o := newTestOwner(t, &memoryEventStore{})
-	for _, name := range []string{FnRetentionHoldAcquire, FnRetentionHoldRelease} {
-		if o.providers()[name] == nil {
-			t.Fatalf("unregistered provider %s", name)
+	request := RetentionHoldRequest{RequestID: "typed", AccountID: "missing", HoldID: "hold", ReasonID: "reason", AcquisitionID: "acquisition"}
+	for _, execute := range []func(RetentionHoldRequest) (Result[RetentionHold], error){o.RetentionHoldAcquire, o.RetentionHoldRelease} {
+		result, err := execute(request)
+		if err != nil || result.OK || result.Error == nil || result.Error.Code != "not_found" {
+			t.Fatalf("typed service rejected valid command incorrectly: %+v %v", result, err)
 		}
 	}
+
 }
 
 func TestRetentionHoldsErasureRemovesOnlyAccountTombstones(t *testing.T) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	identitysvc "github.com/bananalabs-oss/bananauth/internal/identity"
 	"net/http"
 	"strings"
 	"time"
@@ -25,10 +26,7 @@ func (h *ProfileHandler) createComposed(w http.ResponseWriter, r *http.Request) 
 	}
 	accountID := accountID(r)
 	now := time.Now().UTC().UnixMilli()
-	result, err := callIdentity[identityProfile](h.identity, identityProfileCreateEvent, map[string]any{
-		"request_id": identityRequestID("profile-create"),
-		"profile":    map[string]any{"account_id": accountID, "display_name": req.DisplayName, "created_at": now, "updated_at": now},
-	})
+	result, err := h.identity.ProfileCreate(identitysvc.ProfileCreateRequest{RequestID: identityRequestID("profile-create"), Profile: identitysvc.Profile{AccountID: accountID, DisplayName: req.DisplayName, CreatedAt: now, UpdatedAt: now}})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "creation_failed"})
 		return
@@ -42,14 +40,13 @@ func (h *ProfileHandler) createComposed(w http.ResponseWriter, r *http.Request) 
 
 func (h *ProfileHandler) getComposed(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	request := map[string]any{"account_id": id}
-	result, err := callIdentity[identityProfile](h.identity, identityProfileGetEvent, request)
+	result, err := h.identity.ProfileGet(identitysvc.ProfileGetRequest{AccountID: id})
 	if err == nil && result.OK {
 		writeJSON(w, http.StatusOK, result.Value)
 		return
 	}
 	if err == nil && result.Error != nil && result.Error.Code == "not_found" {
-		account, err := callIdentity[identityAccount](h.identity, identityAccountGetEvent, request)
+		account, err := h.identity.AccountGet(identitysvc.AccountGetRequest{AccountID: id})
 		if err == nil && account.OK && strings.TrimSpace(account.Value.Username) != "" {
 			writeJSON(w, http.StatusOK, identityProfile{AccountID: id, DisplayName: strings.TrimSpace(account.Value.Username)})
 			return
@@ -69,10 +66,7 @@ func (h *ProfileHandler) updateComposed(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	accountID := accountID(r)
-	result, err := callIdentity[identityProfile](h.identity, identityProfileUpdateEvent, map[string]any{
-		"request_id": identityRequestID("profile-update"), "account_id": accountID,
-		"display_name": req.DisplayName, "now": time.Now().UTC().UnixMilli(),
-	})
+	result, err := h.identity.ProfileUpdate(identitysvc.ProfileUpdateRequest{RequestID: identityRequestID("profile-update"), AccountID: accountID, DisplayName: req.DisplayName, Now: time.Now().UTC().UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "update_failed"})
 		return

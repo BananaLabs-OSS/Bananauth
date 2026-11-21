@@ -15,7 +15,6 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 func main() {
@@ -36,23 +35,15 @@ func readImport(reader io.Reader) (identity.LegacyImportRequest, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	document, err := readJSONValue(decoder)
+	_, err = readJSONValue(decoder)
 	if err != nil {
 		return request, errors.New("invalid identity export JSON")
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return request, errors.New("trailing identity export data")
 	}
-	document, err = integers(document)
-	if err != nil {
-		return request, err
-	}
-	wire, err := msgpack.Marshal(document)
-	if err != nil {
-		return request, err
-	}
-	typed := msgpack.NewDecoder(bytes.NewReader(wire))
-	typed.DisallowUnknownFields(true)
+	typed := json.NewDecoder(bytes.NewReader(raw))
+	typed.DisallowUnknownFields()
 	if err := typed.Decode(&request); err != nil {
 		return request, errors.New("invalid or unknown identity export fields")
 	}
@@ -110,34 +101,6 @@ func readJSONValue(decoder *json.Decoder) (any, error) {
 	return nil, errors.New("invalid JSON delimiter")
 }
 
-func integers(value any) (any, error) {
-	switch v := value.(type) {
-	case json.Number:
-		number, err := v.Int64()
-		if err != nil {
-			return nil, errors.New("identity export numbers must be exact signed integers")
-		}
-		return number, nil
-	case map[string]any:
-		for key, item := range v {
-			n, err := integers(item)
-			if err != nil {
-				return nil, err
-			}
-			v[key] = n
-		}
-	case []any:
-		for i, item := range v {
-			n, err := integers(item)
-			if err != nil {
-				return nil, err
-			}
-			v[i] = n
-		}
-	}
-	return value, nil
-}
-
 func run(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("import-legacy", flag.ContinueOnError)
 	input := flags.String("input", "", "offline JSON identity export")
@@ -168,21 +131,13 @@ func run(args []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	providers, closeDB, err := identity.Open(context.Background(), *database, keys)
+	service, closeDB, err := identity.Open(context.Background(), *database, keys)
 	if err != nil {
 		return err
 	}
 	defer closeDB.Close()
-	wire, err := msgpack.Marshal(request)
+	response, err := service.LegacyImport(request)
 	if err != nil {
-		return err
-	}
-	result, err := providers[identity.FnLegacyImport](wire)
-	if err != nil {
-		return err
-	}
-	var response identity.Result[identity.LegacyImportResult]
-	if err := msgpack.Unmarshal(result, &response); err != nil {
 		return err
 	}
 	if !response.OK {
