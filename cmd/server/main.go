@@ -14,12 +14,12 @@ import (
 
 	"github.com/bananalabs-oss/bananauth/internal/browser"
 	"github.com/bananalabs-oss/bananauth/internal/identity"
+	identitysvc "github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/internal/session"
 	"github.com/bananalabs-oss/bananauth/internal/storage"
 	"github.com/bananalabs-oss/bananauth/internal/token"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/google/uuid"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 func main() {
@@ -39,7 +39,7 @@ func run() error {
 	if identityPath == "" || sessionPath == "" || len(key) < 32 {
 		return errors.New("identity database, session database, and a JWT secret of at least 32 bytes are required")
 	}
-	keys, err := otpsecure.Parse(setting("BANANAUTH_OTP_KEY_CURRENT", "BANANAAUTH_OTP_KEY_CURRENT"), setting("BANANAUTH_OTP_KEY_PREVIOUS", "BANANAAUTH_OTP_KEY_PREVIOUS"))
+	keys, err := otpsecure.Parse(os.Getenv("BANANAUTH_OTP_KEY_CURRENT"), os.Getenv("BANANAUTH_OTP_KEY_PREVIOUS"))
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	commands, err := browser.Commands(identities, sessions, key)
+	commands, err := browser.New(identities, sessions, key)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func run() error {
 		address = "127.0.0.1:8080"
 	}
 	var discord *discordProvider
-	clientID, clientSecret, redirect := setting("DISCORD_CLIENT_ID", "PULP_OAUTH_DISCORD_CLIENT_ID"), setting("DISCORD_CLIENT_SECRET", "PULP_OAUTH_DISCORD_CLIENT_SECRET"), setting("DISCORD_REDIRECT_URL", "PULP_OAUTH_DISCORD_REDIRECT_URL")
+	clientID, clientSecret, redirect := os.Getenv("DISCORD_CLIENT_ID"), os.Getenv("DISCORD_CLIENT_SECRET"), os.Getenv("DISCORD_REDIRECT_URL")
 	if clientID != "" || clientSecret != "" || redirect != "" {
 		if clientID == "" || clientSecret == "" || redirect == "" {
 			return errors.New("Discord OAuth requires client ID, client secret, and redirect URL")
@@ -101,7 +101,7 @@ func run() error {
 		discord = &discordProvider{clientID: clientID, clientSecret: clientSecret, redirectURL: redirect, base: "https://discord.com",
 			client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	}
-	mux := routes(commands[browser.ProviderResolve], identities)
+	mux := routes(commands.Resolve, identities)
 	if serviceToken := os.Getenv("BANANAUTH_IDENTITY_SERVICE_TOKEN"); serviceToken != "" {
 		if len(serviceToken) < 32 {
 			return errors.New("BANANAUTH_IDENTITY_SERVICE_TOKEN must be at least 32 bytes")
@@ -128,7 +128,7 @@ func run() error {
 	}
 	registerAccountRoutes(mux, identities, sessions, &SessionManager{
 		key: key, expiry: 24 * time.Hour, newSessionID: uuid.NewString,
-	}, discord, commands[browser.ProviderCompleteEmailVerificationV2], replayKey)
+	}, discord, commands.CompleteEmailVerification, replayKey)
 	server := &http.Server{
 		Addr: address, Handler: trustForwardedAddresses(mux, proxies),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
@@ -146,9 +146,8 @@ func run() error {
 	}
 }
 
-func routes(resolve func([]byte) ([]byte, error), identities map[string]func([]byte) ([]byte, error)) *http.ServeMux {
+func routes(resolve func(browser.ResolveRequest) browser.ResolveResult, identities *identitysvc.Service) *http.ServeMux {
 	mux := http.NewServeMux()
-	identityCall := dispatchIdentity(identities)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "healthy", "service": "bananauth"})
 	})
@@ -163,30 +162,21 @@ func routes(resolve func([]byte) ([]byte, error), identities map[string]func([]b
 			writeJSON(w, 401, errorResponse{Error: "invalid authorization format, expected: Bearer <token>"})
 			return
 		}
-		request, err := msgpack.Marshal(browser.ResolveRequest{
-			Version: browser.ContractVersion, Audience: browser.AccountAudience,
-			Credential: header,
-		})
-		if err != nil {
+		response := resolve(browser.ResolveRequest{Version: browser.ContractVersion, Audience: browser.AccountAudience, Credential: header})
+		if response.Version != browser.ContractVersion || response.Error == "unavailable" {
 			writeJSON(w, 503, errorResponse{Error: "session service unavailable"})
 			return
 		}
-		raw, err := resolve(request)
-		var response browser.ResolveResult
-		if err != nil || msgpack.Unmarshal(raw, &response) != nil || response.Version != browser.ContractVersion || response.Error == "unavailable" {
-			writeJSON(w, 503, errorResponse{Error: "session service unavailable"})
-			return
-		}
+
 		if !response.OK {
 			writeJSON(w, 401, errorResponse{Error: "invalid or expired token"})
 			return
 		}
 		username, displayName := "", ""
-		lookup := identity.AccountGetRequest{AccountID: response.AccountID}
-		if account, err := callIdentity[identityAccount](identityCall, identityAccountGetEvent, lookup); err == nil && account.OK {
+		if account, err := identities.AccountGet(identity.AccountGetRequest{AccountID: response.AccountID}); err == nil && account.OK {
 			username = strings.TrimSpace(account.Value.Username)
 		}
-		if profile, err := callIdentity[identityProfile](identityCall, identityProfileGetEvent, lookup); err == nil && profile.OK {
+		if profile, err := identities.ProfileGet(identitysvc.ProfileGetRequest{AccountID: response.AccountID}); err == nil && profile.OK {
 			displayName = strings.TrimSpace(profile.Value.DisplayName)
 		}
 		if displayName == "" {
@@ -207,11 +197,4 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
-}
-
-func setting(current, legacy string) string {
-	if value := os.Getenv(current); value != "" {
-		return value
-	}
-	return os.Getenv(legacy)
 }

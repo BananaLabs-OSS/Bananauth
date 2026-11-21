@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
 	"github.com/bananalabs-oss/bananauth/internal/identity"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -41,7 +41,7 @@ func TestDeliveryHoldsUnlistedRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := effect.NewIntent("fixture", effect.KindNotificationEmailSend, "fixture", sealed)
+	intent, err := notification.NewMessage("fixture", "fixture", sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestDeliveryHoldsUnlistedRecipient(t *testing.T) {
 		t.Fatal("unlisted recipient reached provider")
 		return nil, nil
 	})
-	if _, err := worker.deliver(context.Background(), effect.Lease{Intent: intent}); err == nil ||
+	if _, err := worker.deliver(context.Background(), notification.Lease{Message: intent}); err == nil ||
 		err.Error() != "notification held by verification recipient restriction" {
 		t.Fatalf("expected retryable recipient hold, got %v", err)
 	}
@@ -85,40 +85,57 @@ func TestDeliverySettlesInvalidNotificationsWithoutSending(t *testing.T) {
 		{"recipient mismatch", mismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			intent, err := effect.NewIntent("fixture", effect.KindNotificationEmailSend, "fixture", tc.body)
+			intent, err := notification.NewMessage("fixture", "fixture", testEncryptedBytes(tc.body))
 			if err != nil {
 				t.Fatal(err)
 			}
-			commands := map[string]func([]byte) ([]byte, error){}
+			commands := &testNotificationOutbox{}
 			worker := newDeliveryWorker(commands, keys, "fixture-key", "sender@example.com")
 			worker.client.Transport = testTransport(func(*http.Request) (*http.Response, error) {
 				t.Fatal("invalid intent reached provider")
 				return nil, nil
 			})
-			lease := effect.Lease{
-				Version: effect.OutboxVersionV1, Owner: "auth-identity", ConsumerID: worker.consumer,
-				LeaseID: "fixture-lease", Attempt: 1, LeasedUntilUnixMilli: now.Add(time.Minute).UnixMilli(), Intent: intent,
+			lease := notification.Lease{
+				ConsumerID: worker.consumer,
+				LeaseID:    "fixture-lease", Attempt: 1, LeasedUntilUnixMilli: now.Add(time.Minute).UnixMilli(), Message: intent,
 			}
-			commands[identity.FnEffectsClaim] = func([]byte) ([]byte, error) {
-				return msgpack.Marshal(effect.ClaimResult{
-					Version: lease.Version, Owner: lease.Owner, ConsumerID: lease.ConsumerID, Leases: []effect.Lease{lease},
-				})
+			commands.claim = func(notification.ClaimRequest) (notification.ClaimResult, error) {
+				return notification.ClaimResult{ConsumerID: lease.ConsumerID, Leases: []notification.Lease{lease}}, nil
 			}
-			commands[identity.FnEffectsAck] = func(raw []byte) ([]byte, error) {
-				var ack effect.AcknowledgeRequest
-				if err := msgpack.Unmarshal(raw, &ack); err != nil {
-					t.Fatal(err)
-				}
+			commands.ack = func(ack notification.AcknowledgeRequest) (notification.SettlementResult, error) {
 				if ack.Receipt.ValidateFor(intent) != nil || ack.Receipt.Failure == nil || ack.Receipt.Failure.Code != "invalid_notification_payload" {
-					t.Fatal("expected terminal receipt for the invalid intent")
+					t.Fatal("expected terminal receipt for invalid notification")
 				}
-				return msgpack.Marshal(effect.SettlementResult{
-					Version: lease.Version, Owner: lease.Owner, ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID, Settled: true,
-				})
+				return notification.SettlementResult{ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID, Settled: true}, nil
 			}
 			if err := worker.drain(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
+}
+
+type testNotificationOutbox struct {
+	claim func(notification.ClaimRequest) (notification.ClaimResult, error)
+	ack   func(notification.AcknowledgeRequest) (notification.SettlementResult, error)
+}
+
+func (o *testNotificationOutbox) EffectsClaim(q notification.ClaimRequest) (notification.ClaimResult, error) {
+	return o.claim(q)
+}
+func (o *testNotificationOutbox) EffectsAck(q notification.AcknowledgeRequest) (notification.SettlementResult, error) {
+	return o.ack(q)
+}
+func (o *testNotificationOutbox) EffectsRetry(notification.RetryRequest) (notification.SettlementResult, error) {
+	panic("unexpected retry")
+}
+func (o *testNotificationOutbox) EffectsCheckDelivery(notification.Lease) (identity.Result[bool], error) {
+	panic("invalid notification reached authorization")
+}
+func testEncryptedBytes(v any) []byte {
+	if b, ok := v.([]byte); ok {
+		return b
+	}
+	b, _ := msgpack.Marshal(v)
+	return b
 }

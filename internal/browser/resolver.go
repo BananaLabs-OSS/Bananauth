@@ -4,8 +4,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 const sessionContractVersion = "auth-session.v1"
@@ -17,28 +15,14 @@ type resolver struct {
 	now     func() time.Time
 }
 
-func (r resolver) resolve(raw []byte) ([]byte, error) {
-	result := r.resolveValue(raw)
-	if !result.OK {
-		// Negative receipts retain the exact original three-field contract.
-		// Assurance fields describe successful live sessions only.
-		return msgpack.Marshal(struct {
-			Version string `msgpack:"version"`
-			OK      bool   `msgpack:"ok"`
-			Error   string `msgpack:"error"`
-		}{Version: result.Version, OK: false, Error: result.Error})
-	}
-	return msgpack.Marshal(result)
-}
-
-func (r resolver) resolveValue(raw []byte) ResolveResult {
+func (r resolver) resolveRequest(request ResolveRequest) ResolveResult {
 	if r.verify == nil || r.get == nil || r.account == nil || r.now == nil {
 		return denied("unavailable")
 	}
-	request, ok := decodeExactRequest(raw)
-	if !ok {
+	if request.Version != ContractVersion || request.Audience != AccountAudience || len(request.Credential) > maxCredentialBytes {
 		return denied("invalid_request")
 	}
+
 	token, ok := bearerToken(request.Credential)
 	if !ok {
 		return denied("unauthorized")
@@ -82,41 +66,6 @@ func (r resolver) resolveValue(raw []byte) ResolveResult {
 		AccountID: fact.AccountID, SessionID: fact.SessionID,
 		ExpiresAtUnixMilli: expires, Email: email, VerifiedEmail: verifiedEmail, EmailVerified: emailVerified,
 	}
-}
-
-func decodeExactRequest(raw []byte) (ResolveRequest, bool) {
-	if len(raw) == 0 || len(raw) > maxCredentialBytes+256 {
-		return ResolveRequest{}, false
-	}
-	var fields map[string]any
-	if err := msgpack.Unmarshal(raw, &fields); err != nil || len(fields) != 3 {
-		return ResolveRequest{}, false
-	}
-	for _, key := range []string{"version", "audience", "credential"} {
-		if _, exists := fields[key]; !exists {
-			return ResolveRequest{}, false
-		}
-	}
-	for key := range fields {
-		if key != "version" && key != "audience" && key != "credential" {
-			return ResolveRequest{}, false
-		}
-	}
-	request := ResolveRequest{}
-	var valid bool
-	request.Version, valid = fields["version"].(string)
-	if !valid || request.Version != ContractVersion {
-		return ResolveRequest{}, false
-	}
-	request.Audience, valid = fields["audience"].(string)
-	if !valid || request.Audience != AccountAudience {
-		return ResolveRequest{}, false
-	}
-	request.Credential, valid = fields["credential"].(string)
-	if !valid || len(request.Credential) == 0 || len(request.Credential) > maxCredentialBytes || !utf8.ValidString(request.Credential) {
-		return ResolveRequest{}, false
-	}
-	return request, true
 }
 
 func bearerToken(credential string) (string, bool) {

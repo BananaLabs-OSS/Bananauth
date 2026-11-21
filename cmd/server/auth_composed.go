@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	identitysvc "github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/pkg/authcrypto"
 	"github.com/bananalabs-oss/bananauth/pkg/otpscope"
 	"github.com/google/uuid"
@@ -71,11 +72,7 @@ func (h *AuthHandler) registerComposed(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	accountID, credentialID := uuid.NewString(), uuid.NewString()
-	result, err := callIdentity[identityAccount](h.identity, identityNativeRegisterEvent, map[string]any{
-		"request_id": identityRequestID("native-register"), "account_id": accountID,
-		"credential_id": credentialID, "email": otpscope.NormalizeEmail(req.Email),
-		"username": req.Username, "password": req.Password, "now": now.UnixMilli(),
-	})
+	result, err := h.identity.NativeRegister(identitysvc.NativeRegisterRequest{RequestID: identityRequestID("native-register"), AccountID: accountID, CredentialID: credentialID, Email: otpscope.NormalizeEmail(req.Email), Username: req.Username, Password: req.Password, Now: now.UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "creation_failed", Message: "Failed to create account"})
 		return
@@ -107,9 +104,7 @@ func (h *AuthHandler) loginComposed(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request", Message: err.Error()})
 		return
 	}
-	result, err := callIdentity[identityAccount](h.identity, identityNativeAuthenticateEvent, map[string]any{
-		"email": otpscope.NormalizeEmail(req.Email), "password": req.Password,
-	})
+	result, err := h.identity.NativeAuthenticate(identitysvc.NativeAuthenticateRequest{Email: otpscope.NormalizeEmail(req.Email), Password: req.Password})
 	if err != nil || !result.OK {
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid_credentials", Message: "Invalid email or password"})
 		return
@@ -138,11 +133,7 @@ func (h *AuthHandler) changePasswordComposed(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	accountID := accountID(r)
-	result, err := callIdentity[map[string]any](h.identity, identityPasswordChangeEvent, map[string]any{
-		"request_id": identityRequestID("password-change"), "account_id": accountID,
-		"current_password": req.CurrentPassword, "new_password": req.NewPassword,
-		"now": time.Now().UTC().UnixMilli(),
-	})
+	result, err := h.identity.PasswordChange(identitysvc.PasswordChangeRequest{RequestID: identityRequestID("password-change"), AccountID: accountID, CurrentPassword: req.CurrentPassword, NewPassword: req.NewPassword, Now: time.Now().UTC().UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "update_error"})
 		return
@@ -165,10 +156,7 @@ func (h *AuthHandler) attachNativeCredentialComposed(w http.ResponseWriter, r *h
 		return
 	}
 	accountID := accountID(r)
-	result, err := callIdentity[identityAccount](h.identity, identityNativeAttachEvent, map[string]any{
-		"request_id": identityRequestID("native-attach"), "account_id": accountID, "credential_id": uuid.NewString(),
-		"email": otpscope.NormalizeEmail(req.Email), "username": req.Username, "password": req.Password, "now": time.Now().UTC().UnixMilli(),
-	})
+	result, err := h.identity.NativeCredentialAttach(identitysvc.NativeCredentialAttachRequest{RequestID: identityRequestID("native-attach"), AccountID: accountID, CredentialID: uuid.NewString(), Email: otpscope.NormalizeEmail(req.Email), Username: req.Username, Password: req.Password, Now: time.Now().UTC().UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "identity_error"})
 		return
@@ -191,11 +179,7 @@ func (h *AuthHandler) forgotPasswordComposed(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	now := time.Now().UTC()
-	_, _ = callIdentity[resetIssueResult](h.identity, identityPasswordResetIssueEvent, map[string]any{
-		"request_id": identityRequestID("password-reset-issue"), "otp_id": uuid.NewString(),
-		"effect_id": uuid.NewString(), "email": otpscope.NormalizeEmail(req.Email),
-		"code": authcrypto.GenerateOTP(), "now": now.UnixMilli(), "expires_at": now.Add(10 * time.Minute).UnixMilli(),
-	})
+	_, _ = h.identity.PasswordResetIssue(identitysvc.PasswordResetIssueRequest{RequestID: identityRequestID("password-reset-issue"), OTPID: uuid.NewString(), EffectID: uuid.NewString(), Email: otpscope.NormalizeEmail(req.Email), Code: authcrypto.GenerateOTP(), Now: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Minute).UnixMilli()})
 	writeJSON(w, http.StatusOK, map[string]any{"message": "if an account exists, a reset code has been sent"})
 }
 
@@ -210,10 +194,7 @@ func (h *AuthHandler) resetPasswordComposed(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	now := time.Now().UTC()
-	ipDecision, err := callIdentity[rateDecision](h.identity, identityRateCheckEvent, map[string]any{
-		"request_id": identityRequestID("reset-ip"), "scope": "password_reset_ip", "key": clientIP(r),
-		"now": now.UnixMilli(), "window_millis": resetPwWindow.Milliseconds(), "max_attempts": 1,
-	})
+	ipDecision, err := h.identity.RateCheck(identitysvc.RateCheckRequest{RequestID: identityRequestID("reset-ip"), Scope: "password_reset_ip", Key: clientIP(r), Now: now.UnixMilli(), WindowMillis: resetPwWindow.Milliseconds(), MaxAttempts: 1})
 	if err != nil || !ipDecision.OK {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "identity_error"})
 		return
@@ -223,19 +204,13 @@ func (h *AuthHandler) resetPasswordComposed(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	email := otpscope.NormalizeEmail(req.Email)
-	reset, err := callIdentity[map[string]any](h.identity, identityPasswordResetConsumeEvent, map[string]any{
-		"request_id": identityRequestID("password-reset-consume"), "email": email,
-		"code": strings.ToUpper(req.Code), "new_password": req.NewPassword, "now": now.UnixMilli(),
-	})
+	reset, err := h.identity.PasswordResetConsume(identitysvc.PasswordResetConsumeRequest{RequestID: identityRequestID("password-reset-consume"), Email: email, Code: strings.ToUpper(req.Code), NewPassword: req.NewPassword, Now: now.UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "update_error"})
 		return
 	}
 	if !reset.OK {
-		failures, failureErr := callIdentity[rateDecision](h.identity, identityRateCheckEvent, map[string]any{
-			"request_id": identityRequestID("reset-email"), "scope": "password_reset_email", "key": email,
-			"now": now.UnixMilli(), "window_millis": int64((24 * time.Hour).Milliseconds()), "max_attempts": resetPwMaxTry,
-		})
+		failures, failureErr := h.identity.RateCheck(identitysvc.RateCheckRequest{RequestID: identityRequestID("reset-email"), Scope: "password_reset_email", Key: email, Now: now.UnixMilli(), WindowMillis: int64((24 * time.Hour).Milliseconds()), MaxAttempts: resetPwMaxTry})
 		if failureErr == nil && failures.OK && !failures.Value.Allowed {
 			writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "too_many_attempts", Message: "Too many invalid attempts; request a new code"})
 			return
@@ -244,140 +219,6 @@ func (h *AuthHandler) resetPasswordComposed(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"message": "password reset successful"})
-}
-
-func (h *AuthHandler) issueEmailVerificationComposed(w http.ResponseWriter, r *http.Request) {
-	var req EmailVerificationIssueRequest
-	if err := readJSON(w, r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request", Message: err.Error()})
-		return
-	}
-	now := time.Now().UTC()
-	issued, err := callIdentity[emailVerificationIssueResult](h.identity, identityEmailVerificationIssueEvent, map[string]any{
-		"request_id":      identityRequestID("email-verification-issue"),
-		"verification_id": uuid.NewString(),
-		"effect_id":       uuid.NewString(),
-		"email":           otpscope.NormalizeEmail(req.Email),
-		"caller_key":      clientIP(r),
-		"code":            authcrypto.GenerateOTP(),
-		"now":             now.UnixMilli(),
-		"expires_at":      now.Add(10 * time.Minute).UnixMilli(),
-	})
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "identity_unavailable"})
-		return
-	}
-	if !issued.OK {
-		identityFailure(w, r, issued.Error, http.StatusBadRequest)
-		return
-	}
-	if !issued.Value.Accepted {
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "identity_unavailable"})
-		return
-	}
-	if !issued.Value.EffectQueued {
-		w.Header().Set("Retry-After", "600")
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "rate_limited", "message": "Please wait before requesting another code.", "retry_after": 600})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"sent": true})
-}
-
-func (h *AuthHandler) consumeEmailVerificationComposed(w http.ResponseWriter, r *http.Request) {
-	var req EmailVerificationConsumeRequest
-	if err := readJSON(w, r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request", Message: err.Error()})
-		return
-	}
-	verified, err := callIdentity[emailVerificationConsumeResult](h.identity, identityEmailVerificationConsumeEvent, map[string]any{
-		"request_id": identityRequestID("email-verification-consume"),
-		"account_id": uuid.NewString(),
-		"email":      otpscope.NormalizeEmail(req.Email),
-		"code":       strings.ToUpper(req.Code),
-		"now":        time.Now().UTC().UnixMilli(),
-	})
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: "identity_unavailable"})
-		return
-	}
-	if !verified.OK || !verified.Value.Verified || verified.Value.AccountID == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_code", Message: "Invalid or expired verification code"})
-		return
-	}
-	// AccountID was created or resolved only by the composed identity owner.
-	// It is returned over the configured Bananauth service response, never
-	// accepted from an inbound Sessions/browser header.
-	writeJSON(w, http.StatusOK, map[string]any{"verified": true, "account_id": verified.Value.AccountID})
-}
-
-type completedEmailSession struct {
-	Token     string
-	ExpiresIn int
-	AccountID string
-	SessionID string
-	ExpiresAt int64
-}
-
-// completeEmailSession is the replay-safe cross-owner workflow. Identity and
-// session are separate owners, so atomicity comes from a stable request plus
-// each owner's durable receipt: any interruption can repeat both steps.
-func (h *AuthHandler) completeEmailSession(req EmailVerificationSessionRequest) (completedEmailSession, string, error) {
-	requestUUID, err := uuid.Parse(req.RequestID)
-	if err != nil || requestUUID.String() != req.RequestID {
-		return completedEmailSession{}, "invalid_request", nil
-	}
-	email := otpscope.NormalizeEmail(req.Email)
-	if email == "" || strings.TrimSpace(req.Code) == "" {
-		return completedEmailSession{}, "invalid_request", nil
-	}
-	accountCandidate := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bananauth:email-account:"+requestUUID.String()))
-	verified, err := callIdentity[emailVerificationConsumeResult](h.identity, identityEmailVerificationConsumeEvent, map[string]any{
-		"request_id": "email-session:identity:" + requestUUID.String(),
-		"account_id": accountCandidate.String(),
-		"email":      email, "code": strings.ToUpper(req.Code), "now": time.Now().UTC().UnixMilli(),
-	})
-	if err != nil {
-		return completedEmailSession{}, "identity_unavailable", err
-	}
-	if !verified.OK || !verified.Value.Verified || verified.Value.AccountID == "" {
-		return completedEmailSession{}, "invalid_code", nil
-	}
-	accountID, err := uuid.Parse(verified.Value.AccountID)
-	if err != nil {
-		return completedEmailSession{}, "identity_unavailable", err
-	}
-	sessionID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bananauth:email-session:"+requestUUID.String())).String()
-	token, expires, expiresAt, err := h.sessions.CreateForRequest(accountID, "email-session:create:"+requestUUID.String(), sessionID)
-	if err != nil {
-		return completedEmailSession{}, "session_unavailable", err
-	}
-	return completedEmailSession{Token: token, ExpiresIn: expires, ExpiresAt: expiresAt, AccountID: accountID.String(), SessionID: sessionID}, "", nil
-}
-
-func (h *AuthHandler) completeEmailVerificationSessionComposed(w http.ResponseWriter, r *http.Request) {
-	var req EmailVerificationSessionRequest
-	if err := readJSON(w, r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_request"})
-		return
-	}
-	completed, code, err := h.completeEmailSession(req)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, errorResponse{Error: code})
-		return
-	}
-	if code != "" {
-		status := http.StatusBadRequest
-		if code == "identity_unavailable" || code == "session_unavailable" {
-			status = http.StatusBadGateway
-		}
-		writeJSON(w, status, errorResponse{Error: code})
-		return
-	}
-	writeJSON(w, http.StatusOK, StorefrontSessionResponse{
-		AccessToken: completed.Token, ExpiresIn: completed.ExpiresIn,
-		AccountID: completed.AccountID, SessionID: completed.SessionID,
-		ExpiresAt: completed.ExpiresAt,
-	})
 }
 
 func (h *AuthHandler) deleteAccountComposed(w http.ResponseWriter, r *http.Request) {
@@ -391,10 +232,7 @@ func (h *AuthHandler) deleteAccountComposed(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	accountID := accountID(r)
-	result, err := callIdentity[identityAccount](h.identity, identityAccountDeleteEvent, map[string]any{
-		"request_id": identityRequestID("account-delete"), "account_id": accountID,
-		"password": req.Password, "email": req.Email, "now": time.Now().UTC().UnixMilli(),
-	})
+	result, err := h.identity.AccountDelete(identitysvc.AccountDeleteRequest{RequestID: identityRequestID("account-delete"), AccountID: accountID, Password: req.Password, Email: req.Email, Now: time.Now().UTC().UnixMilli()})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "deletion_failed"})
 		return

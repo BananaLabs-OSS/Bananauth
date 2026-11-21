@@ -166,9 +166,11 @@ func TestVerifiedSessionOwnerClockAndProofValidation(t *testing.T) {
 	if got.OK || got.Error.Code != "invalid_verification" {
 		t.Fatal("noncanonical email proof accepted")
 	}
-	if o.providers()[FnCreateEmailVerifiedOwned] == nil {
-		t.Fatal("new provider not exported")
+	native, err := o.CreateEmailVerifiedOwned(req)
+	if err != nil || !native.OK || native.Value.VerificationRequestID != req.VerificationRequestID {
+		t.Fatal("typed verified-session service changed proof", err)
 	}
+
 }
 func TestVerifiedSessionLegacyMigrationRemainsUnassured(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))

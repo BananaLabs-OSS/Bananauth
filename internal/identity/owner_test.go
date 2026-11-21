@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/bananalabs-oss/bananauth/pkg/passwordcrypto"
 	"github.com/vmihailenco/msgpack/v5"
@@ -21,7 +21,7 @@ func TestRetentionEngineHasNoApplicationReasonVocabulary(t *testing.T) {
 	owner := mustReadSource(t, "owner.go")
 	for _, source := range []string{
 		contract[strings.Index(contract, "type RetentionLease"):strings.Index(contract, "type OAuthState")],
-		owner[strings.Index(owner, "func retentionLeaseKey"):strings.Index(owner, "func (o *owner) oauthStateIssue")],
+		owner[strings.Index(owner, "func retentionLeaseKey"):strings.Index(owner, "func (o *Service) OauthStateIssue")],
 	} {
 		for _, forbidden := range []string{"server", "world", "platform account"} {
 			if strings.Contains(strings.ToLower(source), forbidden) {
@@ -220,7 +220,7 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if !callResult[PasswordResetIssueResult](t, cell.passwordResetIssue, issue).OK {
 		t.Fatal("issue failed")
 	}
-	claimRequest, err := effect.NewClaimRequest(effectOwner, "worker-1", 1, 10000)
+	claimRequest, err := notification.NewClaimRequest("worker-1", 1, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,18 +229,15 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var claimed effect.ClaimResult
+	var claimed notification.ClaimResult
 	if err := msgpack.Unmarshal(response, &claimed); err != nil {
 		t.Fatal(err)
 	}
-	if len(claimed.Leases) != 1 || claimed.Leases[0].Intent.Kind != effect.KindNotificationEmailSend {
+	if len(claimed.Leases) != 1 || claimed.Leases[0].Message.IdempotencyKey != claimed.Leases[0].Message.ID {
 		t.Fatalf("claim = %#v", claimed)
 	}
-	var encrypted []byte
-	if err := msgpack.Unmarshal(claimed.Leases[0].Intent.Payload, &encrypted); err != nil {
-		t.Fatal(err)
-	}
-	plain, _, err := cell.otpKeys.Open(claimed.Leases[0].Intent.ID, encrypted)
+	encrypted := claimed.Leases[0].Message.Ciphertext
+	plain, _, err := cell.otpKeys.Open(claimed.Leases[0].Message.ID, encrypted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,17 +248,17 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if payload.To != register.Email || payload.Subject != "Password reset code" || payload.Text == "" {
 		t.Fatalf("notification payload = %#v", payload)
 	}
-	receipt, err := effect.NewCompletedReceipt(claimed.Leases[0].Intent, map[string]bool{"sent": true})
+	receipt, err := notification.NewCompletedReceipt(claimed.Leases[0].Message, "fixture-delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ack := effect.AcknowledgeRequest{Version: effect.OutboxVersionV1, Owner: effectOwner, ConsumerID: "worker-1", LeaseID: claimed.Leases[0].LeaseID, Receipt: receipt}
+	ack := notification.AcknowledgeRequest{ConsumerID: "worker-1", LeaseID: claimed.Leases[0].LeaseID, Receipt: receipt}
 	raw, _ = msgpack.Marshal(ack)
 	response, err = cell.effectsAck(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var settled effect.SettlementResult
+	var settled notification.SettlementResult
 	if err := msgpack.Unmarshal(response, &settled); err != nil || !settled.Settled {
 		t.Fatalf("settled = %#v, %v", settled, err)
 	}
@@ -271,7 +268,7 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var idle effect.ClaimResult
+	var idle notification.ClaimResult
 	if err := msgpack.Unmarshal(response, &idle); err != nil || len(idle.Leases) != 0 {
 		t.Fatalf("idle claim = %#v, %v", idle, err)
 	}
@@ -279,7 +276,7 @@ func TestEmailEffectUsesFencedLeaseAndDurableReceipt(t *testing.T) {
 		t.Fatalf("idle claim persisted a command: before=%d after=%d", recordsBeforeIdleClaim, len(store.records))
 	}
 	reopened := newTestOwner(t, store)
-	if reopened.state.Effects["email"].Receipt == nil || reopened.state.Effects["email"].Status != string(effect.Completed) {
+	if reopened.state.Effects["email"].Receipt == nil || reopened.state.Effects["email"].Status != string(notification.Completed) {
 		t.Fatalf("receipt did not survive reopen: %#v", reopened.state.Effects["email"])
 	}
 }
@@ -291,16 +288,13 @@ func TestSessionsEmailVerificationCreatesAndReusesTemporaryIdentity(t *testing.T
 		RequestID: "sessions-verify-issue", VerificationID: "verification-1", EffectID: "verification-email-1",
 		Email: " Player@Example.Test ", Code: "123456", Now: 100, ExpiresAt: 1900,
 	}
-	issued := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue)
+	issued := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, issue)
 	if !issued.OK || !issued.Value.Accepted || !issued.Value.EffectQueued {
 		t.Fatalf("issue = %#v", issued)
 	}
 	queued := cell.state.Effects[issue.EffectID]
-	var encrypted []byte
-	if err := msgpack.Unmarshal(queued.Intent.Payload, &encrypted); err != nil {
-		t.Fatal(err)
-	}
-	plain, envelope, err := cell.otpKeys.Open(queued.Intent.ID, encrypted)
+	encrypted := queued.Message.Ciphertext
+	plain, envelope, err := cell.otpKeys.Open(queued.Message.ID, encrypted)
 	if err != nil || envelope.Recipient != "player@example.test" {
 		t.Fatalf("encrypted delivery envelope = %#v %v", envelope, err)
 	}
@@ -309,10 +303,10 @@ func TestSessionsEmailVerificationCreatesAndReusesTemporaryIdentity(t *testing.T
 		email.To != "player@example.test" || email.Subject == "" || email.Text == "" {
 		t.Fatalf("verification delivery was not bound to the one normalized request email: %#v %v", email, err)
 	}
-	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue); !got.OK || got.Value != issued.Value {
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, issue); !got.OK || got.Value != issued.Value {
 		t.Fatalf("idempotent issue = %#v", got)
 	}
-	verified := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	verified := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "sessions-verify-consume", AccountID: "temporary-account-1", Email: "player@example.test", Code: "123456", Now: 200,
 	})
 	if !verified.OK || !verified.Value.Verified || verified.Value.AccountID != "temporary-account-1" {
@@ -322,22 +316,22 @@ func TestSessionsEmailVerificationCreatesAndReusesTemporaryIdentity(t *testing.T
 		RequestID: "sessions-verify-issue-2", VerificationID: "verification-2", EffectID: "verification-email-2",
 		Email: "player@example.test", Code: "654321", Now: 300, ExpiresAt: 1900,
 	}
-	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, secondIssue); !got.OK || !got.Value.Accepted {
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailLoginIssueV2, secondIssue); !got.OK || !got.Value.Accepted {
 		t.Fatalf("second issue = %#v", got)
 	}
-	reused := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	reused := callResult[EmailVerificationConsumeResult](t, cell.emailLoginConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "sessions-verify-consume-2", AccountID: "must-not-fork-account", Email: "player@example.test", Code: "654321", Now: 400,
 	})
 	if !reused.OK || !reused.Value.Verified || reused.Value.AccountID != "temporary-account-1" {
 		t.Fatalf("reused identity = %#v", reused)
 	}
-	if replay := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	if replay := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "sessions-verify-consume-3", Email: "player@example.test", Code: "123456", Now: 401,
 	}); replay.OK || replay.Error == nil || replay.Error.Code != "invalid_code" {
 		t.Fatalf("single-use replay = %#v", replay)
 	}
 	reopened := newTestOwner(t, store)
-	if got := callResult[EmailVerificationConsumeResult](t, reopened.emailVerificationConsume, EmailVerificationConsumeRequest{
+	if got := callResult[EmailVerificationConsumeResult](t, reopened.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "sessions-verify-consume-4", Email: "player@example.test", Code: "123456", Now: 402,
 	}); got.OK || got.Error == nil || got.Error.Code != "invalid_code" {
 		t.Fatalf("restart replay = %#v", got)
@@ -350,17 +344,17 @@ func TestSessionsEmailVerificationAcceptsEarlierCodeWhileReplacementIsInFlight(t
 		{RequestID: "issue-earlier", VerificationID: "verification-earlier", EffectID: "effect-earlier", Email: "player@example.test", Code: "111111", Now: 100, ExpiresAt: 1900},
 		{RequestID: "issue-newer", VerificationID: "verification-newer", EffectID: "effect-newer", Email: "player@example.test", Code: "222222", Now: 101, ExpiresAt: 1901},
 	} {
-		if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, issue); !got.OK || !got.Value.Accepted {
+		if got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, issue); !got.OK || !got.Value.Accepted {
 			t.Fatalf("issue = %#v", got)
 		}
 	}
-	verified := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	verified := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "consume-earlier", AccountID: "temporary-account", Email: "player@example.test", Code: "111111", Now: 200,
 	})
 	if !verified.OK || !verified.Value.Verified {
 		t.Fatalf("earlier delivered code = %#v", verified)
 	}
-	if replay := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	if replay := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "consume-newer-after-success", Email: "player@example.test", Code: "222222", Now: 201,
 	}); replay.OK || replay.Error == nil || replay.Error.Code != "invalid_code" {
 		t.Fatalf("outstanding replacement survived successful login: %#v", replay)
@@ -375,7 +369,7 @@ func TestEmailVerificationIssueIsOwnerThrottledBoundedAndHashed(t *testing.T) {
 			EffectID: fmt.Sprintf("effect-%d", index), Email: " Player@Example.Test ", CallerKey: "192.0.2.10",
 			Code: fmt.Sprintf("12345%d", index), Now: 100 + int64(index), ExpiresAt: 1000,
 		}
-		result := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, request)
+		result := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, request)
 		if !result.OK || !result.Value.Accepted {
 			t.Fatalf("issue %d = %#v", index, result)
 		}
@@ -411,11 +405,11 @@ func TestEmailVerificationIssueIsOwnerThrottledBoundedAndHashed(t *testing.T) {
 func TestEmailVerificationIssuePrunesExpiredOTPAndDeliveryEffect(t *testing.T) {
 	cell := newTestOwner(t, &memoryEventStore{})
 	first := EmailVerificationIssueRequest{RequestID: "first", VerificationID: "old-otp", EffectID: "old-effect", Email: "player@example.test", Code: "123456", Now: 100, ExpiresAt: 200}
-	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, first); !got.OK || !got.Value.EffectQueued {
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, first); !got.OK || !got.Value.EffectQueued {
 		t.Fatalf("first issue = %#v", got)
 	}
 	second := EmailVerificationIssueRequest{RequestID: "second", VerificationID: "new-otp", EffectID: "new-effect", Email: "player@example.test", Code: "654321", Now: 201, ExpiresAt: 400}
-	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, second); !got.OK || !got.Value.EffectQueued {
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, second); !got.OK || !got.Value.EffectQueued {
 		t.Fatalf("second issue = %#v", got)
 	}
 	if _, exists := cell.state.OTPs[first.VerificationID]; exists {
@@ -429,11 +423,11 @@ func TestEmailVerificationIssuePrunesExpiredOTPAndDeliveryEffect(t *testing.T) {
 func TestEmailVerificationEffectIdentityCannotReuseEncryptionNonce(t *testing.T) {
 	cell := newTestOwner(t, &memoryEventStore{})
 	first := EmailVerificationIssueRequest{RequestID: "first-effect", VerificationID: "otp-1", EffectID: "fixed-effect", Email: "one@example.test", Code: "123456", Now: 100, ExpiresAt: 1000}
-	if got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, first); !got.OK {
+	if got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, first); !got.OK {
 		t.Fatalf("first=%#v", got)
 	}
 	second := EmailVerificationIssueRequest{RequestID: "second-effect", VerificationID: "otp-2", EffectID: "fixed-effect", Email: "two@example.test", Code: "654321", Now: 101, ExpiresAt: 1000}
-	got := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, second)
+	got := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, second)
 	if got.OK || got.Error == nil || got.Error.Code != "idempotency_conflict" {
 		t.Fatalf("effect identity reuse=%#v", got)
 	}
@@ -447,7 +441,7 @@ func TestEmailVerificationIssueThrottlesHashedCallerAcrossRecipients(t *testing.
 			EffectID: fmt.Sprintf("caller-effect-%d", index), Email: fmt.Sprintf("player-%d@example.test", index),
 			CallerKey: "198.51.100.4", Code: fmt.Sprintf("%06d", index), Now: 100 + int64(index), ExpiresAt: 1000,
 		}
-		result := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, request)
+		result := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, request)
 		if !result.OK || !result.Value.Accepted {
 			t.Fatalf("caller issue %d = %#v", index, result)
 		}
@@ -460,7 +454,7 @@ func TestEmailVerificationIssueThrottlesHashedCallerAcrossRecipients(t *testing.
 	}
 }
 
-func TestEmailVerificationConsumesLegacyPlaintextSnapshotOTP(t *testing.T) {
+func TestStrictVerificationNeverUpgradesUnboundHistoricalOTP(t *testing.T) {
 	state := newSnapshot()
 	state.OTPs["legacy"] = otpRecord{ID: "legacy", Email: "player@example.test", Code: "123456", Type: "sessions_email_verification", ExpiresAt: 300}
 	store := &memoryEventStore{records: []durableRecord{{
@@ -468,26 +462,27 @@ func TestEmailVerificationConsumesLegacyPlaintextSnapshotOTP(t *testing.T) {
 		Snapshot: state,
 	}}}
 	cell := newTestOwner(t, store)
-	result := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, EmailVerificationConsumeRequest{
+	result := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, EmailVerificationConsumeRequest{
 		RequestID: "consume-legacy", AccountID: "account", Email: "player@example.test", Code: "123456", Now: 200,
 	})
-	if !result.OK || !result.Value.Verified {
-		t.Fatalf("legacy OTP compatibility = %#v", result)
+	if result.OK || result.Error == nil || result.Error.Code != "invalid_code" {
+		t.Fatal("unbound historical OTP gained strict verification authority", result)
 	}
+
 }
 
 func TestSessionsEmailVerificationReplaysSuccessAfterLostResponse(t *testing.T) {
 	cell := newTestOwner(t, &memoryEventStore{})
-	issued := callResult[EmailVerificationIssueResult](t, cell.emailVerificationIssue, EmailVerificationIssueRequest{
+	issued := callResult[EmailVerificationIssueResult](t, cell.emailSignupIssueV2, EmailVerificationIssueRequest{
 		RequestID: "issue", VerificationID: "verification", EffectID: "effect", Email: "player@example.test", Code: "123456", Now: 100, ExpiresAt: 1900,
 	})
 	if !issued.OK {
 		t.Fatalf("issue = %#v", issued)
 	}
 	request := EmailVerificationConsumeRequest{RequestID: "stable-consume", AccountID: "stable-account", Email: "player@example.test", Code: "123456", Now: 200}
-	first := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, request)
+	first := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, request)
 	request.Now = 201
-	replayed := callResult[EmailVerificationConsumeResult](t, cell.emailVerificationConsume, request)
+	replayed := callResult[EmailVerificationConsumeResult](t, cell.emailSignupConsumeV2, request)
 	if !first.OK || !first.Value.Verified || !replayed.OK || !replayed.Value.Verified || replayed.Value.AccountID != first.Value.AccountID {
 		t.Fatalf("lost-success replay: first=%#v replay=%#v", first, replayed)
 	}

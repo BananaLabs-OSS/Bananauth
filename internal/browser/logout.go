@@ -1,37 +1,31 @@
 package browser
 
-import "github.com/vmihailenco/msgpack/v5"
+import "github.com/bananalabs-oss/bananauth/internal/session"
 
-const ProviderLogout = "auth.browser-session.v1.logout"
-const sessionRevokeOwnedProvider = "auth.session.v1.revoke-owned"
-
-type logoutResult struct {
-	Version string `msgpack:"version"`
-	OK      bool   `msgpack:"ok"`
-	Error   string `msgpack:"error,omitempty"`
+type LogoutResult struct {
+	Version string `msgpack:"version" json:"version"`
+	OK      bool   `msgpack:"ok" json:"ok"`
+	Error   string `msgpack:"error,omitempty" json:"error,omitempty"`
 }
-
 type sessionRevoker struct {
 	resolver resolver
-	revoke   func([]byte) ([]byte, error)
+	revoke   func(session.RevokeOwnedRequest) (session.Result[session.Session], error)
 }
 
-func (r sessionRevoker) logout(raw []byte) ([]byte, error) {
-	result := logoutResult{Version: ContractVersion}
-	identity := r.resolver.resolveValue(raw)
-	if !identity.OK {
-		result.Error = identity.Error
-		return msgpack.Marshal(result)
+func (r sessionRevoker) logoutRequest(request ResolveRequest) LogoutResult {
+	result := LogoutResult{Version: ContractVersion}
+	principal := r.resolver.resolveRequest(request)
+	if !principal.OK {
+		result.Error = principal.Error
+		return result
 	}
 	result.Error = "unavailable"
 	if r.revoke != nil {
-		request, _ := msgpack.Marshal(map[string]any{"request_id": "browser-logout:" + identity.SessionID, "session_id": identity.SessionID})
-		response, err := r.revoke(request)
-		var receipt sessionGetResult
-		if err == nil && msgpack.Unmarshal(response, &receipt) == nil && receipt.Version == sessionContractVersion && receipt.OK &&
-			receipt.Value.SessionID == identity.SessionID && receipt.Value.AccountID == identity.AccountID && !receipt.Value.Active && receipt.Value.RevokedAt > 0 {
-			result.OK, result.Error = true, ""
+		receipt, err := r.revoke(session.RevokeOwnedRequest{RequestID: "browser-logout:" + principal.SessionID, SessionID: principal.SessionID})
+		if err == nil && receipt.Version == sessionContractVersion && receipt.OK && receipt.Value.SessionID == principal.SessionID && receipt.Value.AccountID == principal.AccountID && !receipt.Value.Active && receipt.Value.RevokedAt > 0 {
+			result.OK = true
+			result.Error = ""
 		}
 	}
-	return msgpack.Marshal(result)
+	return result
 }

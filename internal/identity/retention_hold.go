@@ -2,7 +2,7 @@ package identity
 
 import (
 	"fmt"
-	"github.com/vmihailenco/msgpack/v5"
+
 	"sort"
 	"strings"
 	"unicode"
@@ -11,30 +11,13 @@ import (
 // Hold commands deliberately accept no expiry or clock. A finite lease keeps
 // its existing separate contract. Unknown fields fail instead of silently
 // turning a caller's expiring request into indefinite protection.
-func decodeRetentionHoldRequest(raw []byte) (RetentionHoldRequest, error) {
-	var fields map[string]msgpack.RawMessage
-	var req RetentionHoldRequest
-	if err := msgpack.Unmarshal(raw, &fields); err != nil {
-		return req, err
-	}
-	allowed := map[string]bool{"request_id": true, "account_id": true, "hold_id": true, "reason_id": true, "acquisition_id": true}
-	if len(fields) != len(allowed) {
-		return req, fmt.Errorf("hold requires exactly request_id, account_id, hold_id, reason_id, acquisition_id")
-	}
-	for key := range fields {
-		if !allowed[key] {
-			return req, fmt.Errorf("unknown hold field")
-		}
-	}
-	if err := msgpack.Unmarshal(raw, &req); err != nil {
-		return req, err
-	}
+func validateRetentionHoldRequest(req RetentionHoldRequest) error {
 	for _, id := range []string{req.RequestID, req.AccountID, req.HoldID, req.ReasonID, req.AcquisitionID} {
 		if id == "" || len(id) > 256 || strings.TrimSpace(id) != id || strings.IndexFunc(id, unicode.IsControl) >= 0 {
-			return req, fmt.Errorf("hold identifiers must be bounded nonempty opaque strings")
+			return fmt.Errorf("hold identifiers must be bounded nonempty opaque strings")
 		}
 	}
-	return req, nil
+	return nil
 }
 func retentionHoldKey(req RetentionHoldRequest) string {
 	return req.AccountID + "\x00" + req.HoldID + "\x00" + req.AcquisitionID
@@ -59,28 +42,27 @@ func retentionEligibilityFor(s *snapshot, account string, now int64) RetentionEl
 	holds := activeRetentionHolds(s, account)
 	return RetentionEligibility{Deletable: len(leases) == 0 && len(holds) == 0, LiveLeases: leases, LiveHolds: holds}
 }
-func (o *owner) retentionHoldAcquire(raw []byte) ([]byte, error) {
-	req, err := decodeRetentionHoldRequest(raw)
-	if err != nil {
-		return encode(failure[any]("invalid_request", err.Error()))
+func (o *Service) RetentionHoldAcquire(req RetentionHoldRequest) (Result[RetentionHold], error) {
+	if err := validateRetentionHoldRequest(req); err != nil {
+		return failure[RetentionHold]("invalid_request", err.Error()), nil
 	}
-	return o.command(FnRetentionHoldAcquire, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[RetentionHold](o, FnRetentionHoldAcquire, req.RequestID, req, func(s *snapshot) (RetentionHold, error) {
 		if _, ok := s.Accounts[req.AccountID]; !ok {
-			return nil, domain("not_found", "No account found")
+			return zeroValue[RetentionHold](), domain("not_found", "No account found")
 		}
 		key := retentionHoldKey(req)
 		if old, ok := s.RetentionHolds[key]; ok {
 			if old.ReasonID != req.ReasonID {
-				return nil, domain("conflict", "hold reason cannot change")
+				return zeroValue[RetentionHold](), domain("conflict", "hold reason cannot change")
 			}
 			if !old.Active {
-				return nil, domain("conflict", "released acquisition cannot be acquired again")
+				return zeroValue[RetentionHold](), domain("conflict", "released acquisition cannot be acquired again")
 			}
 			return old, nil
 		}
 		for _, old := range s.RetentionHolds {
 			if old.Active && old.AccountID == req.AccountID && old.HoldID == req.HoldID {
-				return nil, domain("conflict", "hold already has an active acquisition")
+				return zeroValue[RetentionHold](), domain("conflict", "hold already has an active acquisition")
 			}
 		}
 		hold := RetentionHold{AccountID: req.AccountID, HoldID: req.HoldID, ReasonID: req.ReasonID, AcquisitionID: req.AcquisitionID, Active: true}
@@ -88,19 +70,18 @@ func (o *owner) retentionHoldAcquire(raw []byte) ([]byte, error) {
 		return hold, nil
 	})
 }
-func (o *owner) retentionHoldRelease(raw []byte) ([]byte, error) {
-	req, err := decodeRetentionHoldRequest(raw)
-	if err != nil {
-		return encode(failure[any]("invalid_request", err.Error()))
+func (o *Service) RetentionHoldRelease(req RetentionHoldRequest) (Result[RetentionHold], error) {
+	if err := validateRetentionHoldRequest(req); err != nil {
+		return failure[RetentionHold]("invalid_request", err.Error()), nil
 	}
-	return o.command(FnRetentionHoldRelease, req.RequestID, req, func(s *snapshot) (any, error) {
+	return runCommand[RetentionHold](o, FnRetentionHoldRelease, req.RequestID, req, func(s *snapshot) (RetentionHold, error) {
 		key := retentionHoldKey(req)
 		hold, ok := s.RetentionHolds[key]
 		if !ok {
-			return nil, domain("not_found", "hold acquisition not found")
+			return zeroValue[RetentionHold](), domain("not_found", "hold acquisition not found")
 		}
 		if hold.ReasonID != req.ReasonID {
-			return nil, domain("conflict", "hold reason does not match")
+			return zeroValue[RetentionHold](), domain("conflict", "hold reason does not match")
 		}
 		hold.Active = false
 		s.RetentionHolds[key] = hold

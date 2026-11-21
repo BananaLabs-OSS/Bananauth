@@ -11,7 +11,7 @@ import (
 var sqliteBusyTimeout = regexp.MustCompile(`(?i)^\s*PRAGMA\s+busy_timeout\s*=\s*[0-9]+\s*;?\s*$`)
 
 // rewriteSQLiteSQL translates the small, documented SQLite-storage ABI
-// surface that existing Pulp WASM cells emit. It is not a general SQLite
+// surface used by this application. It is not a general SQLite
 // dialect converter: any SQLite-only form outside this surface is rejected so
 // a host never executes SQL with altered meaning.
 func Rewrite(query string, argCount int) (string, error) {

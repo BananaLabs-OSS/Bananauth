@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -118,7 +118,7 @@ func TestIdleWorkerReplicaDiscoversEffectQueuedByRequestReplica(t *testing.T) {
 		EffectID: "verification-email-1", Email: "player@example.test",
 		Code: "123456", Now: now, ExpiresAt: now + int64((10*time.Minute)/time.Millisecond),
 	}
-	issued := callResult[EmailVerificationIssueResult](t, requestOwner.emailVerificationIssue, issue)
+	issued := callResult[EmailVerificationIssueResult](t, requestOwner.emailSignupIssueV2, issue)
 	if !issued.OK || !issued.Value.EffectQueued {
 		t.Fatalf("issue = %#v", issued)
 	}
@@ -126,7 +126,7 @@ func TestIdleWorkerReplicaDiscoversEffectQueuedByRequestReplica(t *testing.T) {
 		t.Fatal("worker fixture was not stale before claim")
 	}
 
-	claim, err := effect.NewClaimRequest(effectOwner, "worker-replica", 1, int64((30*time.Second)/time.Millisecond))
+	claim, err := notification.NewClaimRequest("worker-replica", 1, int64((30*time.Second)/time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +138,11 @@ func TestIdleWorkerReplicaDiscoversEffectQueuedByRequestReplica(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result effect.ClaimResult
+	var result notification.ClaimResult
 	if err := msgpack.Unmarshal(response, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Leases) != 1 || result.Leases[0].Intent.ID != issue.EffectID {
+	if len(result.Leases) != 1 || result.Leases[0].Message.ID != issue.EffectID {
 		t.Fatalf("leases = %#v, want effect queued by request replica", result.Leases)
 	}
 }

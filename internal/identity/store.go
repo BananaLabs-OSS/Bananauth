@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
 type commandReceipt struct {
-	Operation string `msgpack:"operation"`
-	RequestID string `msgpack:"request_id"`
-	Digest    string `msgpack:"digest"`
-	Response  []byte `msgpack:"response"`
+	Operation string `msgpack:"operation" json:"operation"`
+	RequestID string `msgpack:"request_id" json:"request_id"`
+	Digest    string `msgpack:"digest" json:"digest"`
+	Response  []byte `msgpack:"response" json:"response"`
 }
 
 type durableRecord struct {
-	Receipt  commandReceipt `msgpack:"receipt"`
-	Snapshot snapshot       `msgpack:"snapshot"`
+	Receipt  commandReceipt `msgpack:"receipt" json:"receipt"`
+	Snapshot snapshot       `msgpack:"snapshot" json:"snapshot"`
 }
 
 type eventStore interface {
@@ -66,14 +67,14 @@ func (s *sqliteEventStore) Load(ctx context.Context) (snapshot, map[string]comma
 		return snapshot{}, nil, err
 	}
 	if err == nil {
-		if err := msgpack.Unmarshal(rawSnapshot, &current); err != nil {
+		if err := decodeSnapshot(rawSnapshot, &current); err != nil {
 			return snapshot{}, nil, fmt.Errorf("decode identity snapshot: %w", err)
 		}
 	}
 
 	// Every journal row contains a complete snapshot. Fetching all of those
-	// snapshots through the WASM database ABI grows quadratically with identity
-	// history and can exhaust guest memory during startup. Only the newest
+	// snapshots grows quadratically with identity
+	// history and can exhaust memory during startup. Only the newest
 	// snapshot is state; older rows contribute idempotency receipts alone.
 	rows, err := s.db.QueryContext(ctx, `SELECT operation, request_id, request_digest, response
 		FROM auth_identity_commands ORDER BY revision ASC`)
@@ -103,7 +104,7 @@ func (s *sqliteEventStore) LoadCommand(ctx context.Context, operation, requestID
 		return 0, snapshot{}, nil, err
 	}
 	if err == nil {
-		if err := msgpack.Unmarshal(rawSnapshot, &current); err != nil {
+		if err := decodeSnapshot(rawSnapshot, &current); err != nil {
 			return 0, snapshot{}, nil, fmt.Errorf("decode current identity snapshot: %w", err)
 		}
 	}
@@ -197,4 +198,61 @@ func (s *memoryEventStore) AppendCAS(_ context.Context, expectedRevision int64, 
 	s.erasureReceiptIndex[erasureReceiptKeyV1{record.Receipt.Operation, record.Receipt.RequestID}] = len(s.records)
 	s.records = append(s.records, durableRecord{Receipt: record.Receipt, Snapshot: record.Snapshot.clone()})
 	return true, nil
+}
+
+func decodeSnapshot(raw []byte, current *snapshot) error {
+	var decoded snapshot
+	if err := msgpack.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	if decoded.Format != "bananauth.identity.v2" {
+		return fmt.Errorf("identity store requires explicit offline notification-format migration")
+	}
+	*current = decoded
+	return nil
+}
+
+// InitializeStore creates the native schema for the explicit offline converter.
+// It grants no network capability and does not accept an existing legacy format.
+func InitializeStore(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("identity database required")
+	}
+	return (&sqliteEventStore{db: db}).Migrate(ctx)
+}
+
+// ValidateMigratedSnapshot verifies the new queue before offline publication.
+func ValidateMigratedSnapshot(raw []byte) error {
+	var current snapshot
+	if err := decodeSnapshot(raw, &current); err != nil {
+		return err
+	}
+	for id, row := range current.Effects {
+		if id != row.Message.ID {
+			return fmt.Errorf("notification identity mismatch")
+		}
+		if err := row.Message.Validate(); err != nil {
+			return err
+		}
+		if row.Lease != nil {
+			if err := row.Lease.Validate(); err != nil {
+				return err
+			}
+			if !notification.SameMessage(row.Message, row.Lease.Message) {
+				return fmt.Errorf("notification lease message mismatch")
+			}
+		}
+		if row.Receipt != nil {
+			if err := row.Receipt.ValidateFor(row.Message); err != nil {
+				return err
+			}
+		}
+	}
+	for _, state := range current.VerificationFactsV2 {
+		record, ok := current.Effects[state.Fact.EffectID]
+		if ok && !factIntentMatchesV2(state.Fact, record) {
+			return fmt.Errorf("verification message evidence mismatch")
+		}
+	}
+	return nil
 }

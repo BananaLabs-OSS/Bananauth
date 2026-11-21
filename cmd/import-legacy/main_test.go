@@ -11,7 +11,6 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/identity"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/bananalabs-oss/bananauth/pkg/passwordcrypto"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestImportPreservesCredentialsAndReplaysWithoutRevertingChanges(t *testing.T) {
@@ -35,28 +34,16 @@ func TestImportPreservesCredentialsAndReplaysWithoutRevertingChanges(t *testing.
 		t.Fatal("import report leaked credential material")
 	}
 	keys, _ := otpsecure.Parse(os.Getenv("BANANAUTH_OTP_KEY_CURRENT"), "")
-	providers, closeDB, err := identity.Open(t.Context(), database, keys)
+	service, closeDB, err := identity.Open(t.Context(), database, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	execute := func(name string, request any) []byte {
-		t.Helper()
-		input, err := msgpack.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		output, err := providers[name](input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return output
-	}
-	var login identity.Result[identity.AccountProjection]
-	if err := msgpack.Unmarshal(execute(identity.FnNativeAuthenticate, identity.NativeAuthenticateRequest{Email: "fixture@example.test", Password: "fixture-original-password"}), &login); err != nil || !login.OK || login.Value.AccountID != "account" {
+	login, err := service.NativeAuthenticate(identity.NativeAuthenticateRequest{Email: "fixture@example.test", Password: "fixture-original-password"})
+	if err != nil || !login.OK || login.Value.AccountID != "account" {
 		t.Fatalf("imported credential cannot authenticate: %+v %v", login, err)
 	}
-	var changed identity.Result[map[string]any]
-	if err := msgpack.Unmarshal(execute(identity.FnNativePasswordChange, identity.PasswordChangeRequest{RequestID: "change-after-import", AccountID: "account", CurrentPassword: "fixture-original-password", NewPassword: "fixture-replacement-password", Now: 200}), &changed); err != nil || !changed.OK {
+	changed, err := service.PasswordChange(identity.PasswordChangeRequest{RequestID: "change-after-import", AccountID: "account", CurrentPassword: "fixture-original-password", NewPassword: "fixture-replacement-password", Now: 200})
+	if err != nil || !changed.OK {
 		t.Fatalf("password change failed: %+v %v", changed, err)
 	}
 	closeDB.Close()
@@ -67,12 +54,13 @@ func TestImportPreservesCredentialsAndReplaysWithoutRevertingChanges(t *testing.
 	if !bytes.Equal(first.Bytes(), replay.Bytes()) {
 		t.Fatal("import did not replay exact receipt")
 	}
-	providers, closeDB, err = identity.Open(t.Context(), database, keys)
+	service, closeDB, err = identity.Open(t.Context(), database, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeDB.Close()
-	if err := msgpack.Unmarshal(execute(identity.FnNativeAuthenticate, identity.NativeAuthenticateRequest{Email: "fixture@example.test", Password: "fixture-replacement-password"}), &login); err != nil || !login.OK {
+	login, err = service.NativeAuthenticate(identity.NativeAuthenticateRequest{Email: "fixture@example.test", Password: "fixture-replacement-password"})
+	if err != nil || !login.OK {
 		t.Fatal("import replay reverted owner-managed password")
 	}
 	if actual, _ := os.ReadFile(source); !bytes.Equal(actual, raw) {

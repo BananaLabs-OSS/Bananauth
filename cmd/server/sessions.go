@@ -5,30 +5,20 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/token"
 	"time"
 
+	"github.com/bananalabs-oss/bananauth/internal/session"
 	"github.com/google/uuid"
-	"github.com/vmihailenco/msgpack/v5"
 )
-
-const (
-	sessionCreatedEvent      = "bananauth.session.created.v1"
-	sessionCreatedOwnedEvent = "bananauth.session.created-owned.v1"
-	sessionVerifiedEvent     = "bananauth.session.verified.v1"
-	sessionRevokedEvent      = "bananauth.session.revoked.v1"
-	sessionRevokedOwnedEvent = "bananauth.session.revoked-owned.v1"
-)
-
-type sessionDispatcher func(string, []byte) ([]byte, error)
 
 type SessionManager struct {
 	key          token.Key
 	expiry       time.Duration
-	dispatch     sessionDispatcher
+	service      *session.Service
 	newSessionID func() string
 }
 
 func (m *SessionManager) check(accountID, sessionID string) (bool, error) {
-	var result sessionWorkflowResult
-	if err := m.call(sessionVerifiedEvent, map[string]any{"session_id": sessionID, "now": time.Now().UTC().UnixMilli()}, &result); err != nil {
+	result, err := m.service.Get(session.GetRequest{SessionID: sessionID, Now: time.Now().UTC().UnixMilli()})
+	if err != nil {
 		return false, err
 	}
 	return result.OK && result.Value.Active && result.Value.SessionID == sessionID && result.Value.AccountID == accountID, nil
@@ -48,14 +38,14 @@ func (m *SessionManager) CreateForRequest(accountID uuid.UUID, requestID, sessio
 	if requestID == "" || sessionID == "" {
 		return "", 0, 0, fmt.Errorf("stable session request is incomplete")
 	}
-	if m.dispatch == nil {
+	if m.service == nil {
 		return "", 0, 0, fmt.Errorf("stable session requests require the durable session owner")
 	}
-	var result sessionWorkflowResult
-	if err := m.call(sessionCreatedOwnedEvent, map[string]any{
-		"request_id": requestID, "session_id": sessionID, "account_id": accountID.String(),
-		"lifetime_millis": m.expiry.Milliseconds(),
-	}, &result); err != nil {
+	result, err := m.service.CreateOwned(session.CreateOwnedRequest{
+		RequestID: requestID, SessionID: sessionID, AccountID: accountID.String(),
+		LifetimeMillis: m.expiry.Milliseconds(),
+	})
+	if err != nil {
 		return "", 0, 0, fmt.Errorf("persist session: %w", err)
 	}
 	if !result.OK || !result.Value.Active || result.Value.SessionID != sessionID || result.Value.AccountID != accountID.String() || result.Value.ExpiresAt <= result.Value.CreatedAt || result.Value.RevokedAt != 0 {
@@ -75,14 +65,14 @@ func (m *SessionManager) CreateForRequest(accountID uuid.UUID, requestID, sessio
 
 func (m *SessionManager) createAt(accountID uuid.UUID, requestID, sessionID string, now time.Time) (string, int, error) {
 	expiresAt := now.Add(m.expiry)
-	var result sessionWorkflowResult
-	if err := m.call(sessionCreatedEvent, map[string]any{
-		"request_id": requestID,
-		"session_id": sessionID,
-		"account_id": accountID.String(),
-		"created_at": now.UnixMilli(),
-		"expires_at": expiresAt.UnixMilli(),
-	}, &result); err != nil {
+	result, err := m.service.Create(session.CreateRequest{
+		RequestID: requestID,
+		SessionID: sessionID,
+		AccountID: accountID.String(),
+		CreatedAt: now.UnixMilli(),
+		ExpiresAt: expiresAt.UnixMilli(),
+	})
+	if err != nil {
 		return "", 0, fmt.Errorf("persist session: %w", err)
 	}
 	if !result.OK || !result.Value.Active {
@@ -99,56 +89,14 @@ func (m *SessionManager) createAt(accountID uuid.UUID, requestID, sessionID stri
 }
 
 func (m *SessionManager) RevokeChecked(sessionID string) error {
-	var result sessionWorkflowResult
-	if err := m.call(sessionRevokedOwnedEvent, map[string]any{
-		"request_id": "session:logout:" + sessionID, "session_id": sessionID,
-	}, &result); err != nil {
+	result, err := m.service.RevokeOwned(session.RevokeOwnedRequest{
+		RequestID: "session:logout:" + sessionID, SessionID: sessionID,
+	})
+	if err != nil {
 		return fmt.Errorf("revoke session: %w", err)
 	}
 	if !result.OK || result.Value.SessionID != sessionID || result.Value.Active || result.Value.RevokedAt <= 0 {
 		return fmt.Errorf("revoke session: owner rejected revocation")
-	}
-	return nil
-}
-
-type sessionWorkflowResult struct {
-	Version string                 `msgpack:"version"`
-	OK      bool                   `msgpack:"ok"`
-	Value   sessionWorkflowSession `msgpack:"value"`
-	Error   *sessionWorkflowError  `msgpack:"error,omitempty"`
-}
-
-type sessionWorkflowSession struct {
-	SessionID string `msgpack:"session_id"`
-	AccountID string `msgpack:"account_id"`
-	CreatedAt int64  `msgpack:"created_at"`
-	ExpiresAt int64  `msgpack:"expires_at"`
-	RevokedAt int64  `msgpack:"revoked_at"`
-	Active    bool   `msgpack:"active"`
-}
-
-type sessionWorkflowError struct {
-	Code    string `msgpack:"code"`
-	Message string `msgpack:"message"`
-}
-
-func (m *SessionManager) call(event string, request any, response *sessionWorkflowResult) error {
-	if m.dispatch == nil {
-		return fmt.Errorf("session workflow dispatcher is nil")
-	}
-	requestWire, err := msgpack.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("encode %s request: %w", event, err)
-	}
-	responseWire, err := m.dispatch(event, requestWire)
-	if err != nil {
-		return err
-	}
-	if err := msgpack.Unmarshal(responseWire, response); err != nil {
-		return fmt.Errorf("decode %s response: %w", event, err)
-	}
-	if response.Version != "auth-session.v1" {
-		return fmt.Errorf("%s returned contract %q", event, response.Version)
 	}
 	return nil
 }

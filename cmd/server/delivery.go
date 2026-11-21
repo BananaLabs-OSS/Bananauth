@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bananalabs-oss/bananauth/internal/effect"
 	"github.com/bananalabs-oss/bananauth/internal/identity"
+	"github.com/bananalabs-oss/bananauth/internal/notification"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/google/uuid"
 	"github.com/vmihailenco/msgpack/v5"
@@ -22,14 +22,14 @@ import (
 var errInvalidNotification = errors.New("notification payload is invalid or expired")
 
 type deliveryWorker struct {
-	commands                         map[string]func([]byte) ([]byte, error)
+	commands                         notificationOutbox
 	keys                             otpsecure.Keyring
 	client                           *http.Client
 	testRecipients                   map[string]bool
 	endpoint, apiKey, from, consumer string
 }
 
-func newDeliveryWorker(commands map[string]func([]byte) ([]byte, error), keys otpsecure.Keyring, apiKey, from string) *deliveryWorker {
+func newDeliveryWorker(commands notificationOutbox, keys otpsecure.Keyring, apiKey, from string) *deliveryWorker {
 	return &deliveryWorker{
 		commands: commands, keys: keys, endpoint: "https://api.resend.com/emails", apiKey: apiKey, from: from,
 		consumer: "bananauth-email:" + uuid.NewString(),
@@ -84,32 +84,19 @@ func (d *deliveryWorker) run(ctx context.Context) {
 	}
 }
 
-func (d *deliveryWorker) command(name string, request, response any) error {
-	wire, err := msgpack.Marshal(request)
-	if err != nil {
-		return err
-	}
-	execute := d.commands[name]
-	if execute == nil {
-		return errors.New("outbox command is unavailable")
-	}
-	raw, err := execute(wire)
-	if err != nil {
-		return err
-	}
-	return msgpack.Unmarshal(raw, response)
-}
-
 func (d *deliveryWorker) drain(ctx context.Context) error {
-	claim, err := effect.NewClaimRequest("auth-identity", d.consumer, 1, (30 * time.Second).Milliseconds())
+	if d.commands == nil {
+		return errors.New("notification outbox unavailable")
+	}
+	claim, err := notification.NewClaimRequest(d.consumer, 1, (30 * time.Second).Milliseconds())
 	if err != nil {
 		return err
 	}
-	var result effect.ClaimResult
-	if err := d.command(identity.FnEffectsClaim, claim, &result); err != nil {
+	result, err := d.commands.EffectsClaim(claim)
+	if err != nil {
 		return err
 	}
-	if result.Validate() != nil || result.Owner != claim.Owner || result.ConsumerID != claim.ConsumerID || len(result.Leases) > 1 {
+	if result.Validate() != nil || result.ConsumerID != claim.ConsumerID || len(result.Leases) > 1 {
 		return errors.New("invalid email outbox claim")
 	}
 	if len(result.Leases) == 0 {
@@ -120,36 +107,36 @@ func (d *deliveryWorker) drain(ctx context.Context) error {
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	messageID, err := d.deliver(ctx, lease)
-	var settled effect.SettlementResult
+	var settled notification.SettlementResult
+	var settleErr error
 	if err != nil && !errors.Is(err, errInvalidNotification) {
-		retry := effect.RetryRequest{
-			Version: effect.OutboxVersionV1, Owner: lease.Owner, ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID,
-			Failure:          effect.Failure{Code: "notification_delivery_failed", Message: "notification delivery failed"},
+		retry := notification.RetryRequest{
+			ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID,
+			Failure:          notification.Failure{Code: "notification_delivery_failed", Message: "notification delivery failed"},
 			RetryAtUnixMilli: time.Now().Add(30 * time.Second).UnixMilli(),
 		}
-		if err := d.command(identity.FnEffectsRetry, retry, &settled); err != nil {
-			return err
+		settled, settleErr = d.commands.EffectsRetry(retry)
+		if settleErr != nil {
+			return settleErr
 		}
 	} else {
-		var receipt effect.Receipt
+		var receipt notification.Receipt
 		if errors.Is(err, errInvalidNotification) {
-			receipt, err = effect.NewFailedReceipt(lease.Intent, effect.Failure{
+			receipt, err = notification.NewFailedReceipt(lease.Message, notification.Failure{
 				Code: "invalid_notification_payload", Message: errInvalidNotification.Error(),
 			})
 		} else {
-			receipt, err = effect.NewCompletedReceipt(lease.Intent, struct {
-				Provider  string `msgpack:"provider"`
-				MessageID string `msgpack:"message_id"`
-			}{Provider: "resend", MessageID: messageID})
+			receipt, err = notification.NewCompletedReceipt(lease.Message, messageID)
 		}
 		if err != nil {
 			return err
 		}
-		ack := effect.AcknowledgeRequest{
-			Version: effect.OutboxVersionV1, Owner: lease.Owner, ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID, Receipt: receipt,
+		ack := notification.AcknowledgeRequest{
+			ConsumerID: lease.ConsumerID, LeaseID: lease.LeaseID, Receipt: receipt,
 		}
-		if err := d.command(identity.FnEffectsAck, ack, &settled); err != nil {
-			return err
+		settled, settleErr = d.commands.EffectsAck(ack)
+		if settleErr != nil {
+			return settleErr
 		}
 	}
 	if err := settled.ValidateFor(lease); err != nil {
@@ -161,15 +148,9 @@ func (d *deliveryWorker) drain(ctx context.Context) error {
 	return nil
 }
 
-func (d *deliveryWorker) deliver(ctx context.Context, lease effect.Lease) (string, error) {
-	intent := lease.Intent
-	if intent.Kind != effect.KindNotificationEmailSend {
-		return "", errInvalidNotification
-	}
-	var encrypted []byte
-	if err := msgpack.Unmarshal(intent.Payload, &encrypted); err != nil {
-		return "", errInvalidNotification
-	}
+func (d *deliveryWorker) deliver(ctx context.Context, lease notification.Lease) (string, error) {
+	intent := lease.Message
+	encrypted := intent.Ciphertext
 	raw, envelope, err := d.keys.Open(intent.ID, encrypted)
 	if err != nil || envelope.ExpiresAt <= time.Now().UnixMilli() {
 		return "", errInvalidNotification
@@ -201,8 +182,11 @@ func (d *deliveryWorker) deliver(ctx context.Context, lease effect.Lease) (strin
 	req.Header.Set("Authorization", "Bearer "+d.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", intent.IdempotencyKey)
-	var allowed identity.Result[bool]
-	if err := d.command(identity.FnEffectsCheckDelivery, lease, &allowed); err != nil || !allowed.OK {
+	if d.commands == nil {
+		return "", errors.New("notification delivery authorization unavailable")
+	}
+	allowed, err := d.commands.EffectsCheckDelivery(lease)
+	if err != nil || !allowed.OK {
 		return "", errors.New("notification delivery authorization unavailable")
 	}
 	if !allowed.Value {
@@ -223,4 +207,12 @@ func (d *deliveryWorker) deliver(ctx context.Context, lease effect.Lease) (strin
 		return "", errors.New("invalid notification provider response")
 	}
 	return result.ID, nil
+}
+
+// notificationOutbox is the delivery worker's bounded durable authority.
+type notificationOutbox interface {
+	EffectsClaim(notification.ClaimRequest) (notification.ClaimResult, error)
+	EffectsAck(notification.AcknowledgeRequest) (notification.SettlementResult, error)
+	EffectsRetry(notification.RetryRequest) (notification.SettlementResult, error)
+	EffectsCheckDelivery(notification.Lease) (identity.Result[bool], error)
 }

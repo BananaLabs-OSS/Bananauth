@@ -21,7 +21,6 @@ import (
 	"github.com/bananalabs-oss/bananauth/internal/token"
 	"github.com/bananalabs-oss/bananauth/pkg/otpsecure"
 	"github.com/google/uuid"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 func TestNativeAccountSessionLifecycle(t *testing.T) {
@@ -46,11 +45,11 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := token.Key(strings.Repeat("s", 32))
-	commands, err := browser.Commands(identities, sessions, key)
+	commands, err := browser.New(identities, sessions, key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := routes(commands[browser.ProviderResolve], identities)
+	mux := routes(commands.Resolve, identities)
 	exchanges := 0
 	discord := &discordProvider{
 		clientID: "fixture", clientSecret: "fixture-secret", base: "https://discord.example",
@@ -69,7 +68,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 		})},
 	}
-	registerAccountRoutes(mux, identities, sessions, &SessionManager{key: key, expiry: time.Hour, newSessionID: uuid.NewString}, discord, commands[browser.ProviderCompleteEmailVerificationV2], []byte(strings.Repeat("r", 32)))
+	registerAccountRoutes(mux, identities, sessions, &SessionManager{key: key, expiry: time.Hour, newSessionID: uuid.NewString}, discord, commands.CompleteEmailVerification, []byte(strings.Repeat("r", 32)))
 	for _, retired := range []string{"/auth/email-verification/v2", "/auth/email-verification/v2/consume", "/auth/email-verification/v2/session"} {
 		r := httptest.NewRecorder()
 		mux.ServeHTTP(r, httptest.NewRequest("POST", retired, strings.NewReader(`{"email":"retired@example.com","intent":"signup"}`)))
@@ -137,20 +136,31 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	registerIdentityRoutes(mux, identities, serviceToken)
 	callIdentity := func(path, token string, input any, status int) []byte {
 		t.Helper()
-		raw, err := msgpack.Marshal(input)
+		raw, err := json.Marshal(input)
 		if err != nil {
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/msgpack")
+		req.Header.Set("Content-Type", "application/json")
 		out := httptest.NewRecorder()
 		mux.ServeHTTP(out, req)
 		if out.Code != status {
 			t.Fatalf("%s returned %d, want %d", path, out.Code, status)
 		}
-		if status == 200 && (out.Header().Get("Content-Type") != "application/msgpack" || out.Header().Get("Cache-Control") != "no-store") {
+		if status == 200 && (out.Header().Get("Content-Type") != "application/json" || out.Header().Get("Cache-Control") != "no-store") {
 			t.Fatal("unexpected response headers")
+		}
+		if status == 200 {
+			var value map[string]any
+			if json.Unmarshal(out.Body.Bytes(), &value) != nil {
+				t.Fatal("invalid private JSON")
+			}
+			for _, key := range []string{"version", "value", "audience"} {
+				if _, exists := value[key]; exists {
+					t.Fatalf("private response contains retired protocol field %s", key)
+				}
+			}
 		}
 		return out.Body.Bytes()
 	}
@@ -164,36 +174,29 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	erasureFixture := call(201, "POST", "/auth/register", "", `{"email":"erase@example.test","username":"erasure-fixture","password":"Synthetic-erasure-password-123"}`)
 	eraseID := erasureFixture["account_id"].(string)
 	erase := identity.AccountEraseRequest{RequestID: "erasure-fixture", AccountID: eraseID, ReasonID: "fixture", Now: time.Now().UnixMilli()}
-	var erased identity.Result[identity.AccountProjection]
+	var erased identity.AccountProjection
 	erasedWire := callIdentity("/internal/erasure/accounts/erase", erasureToken, erase, http.StatusOK)
-	if err := msgpack.Unmarshal(erasedWire, &erased); err != nil || !erased.OK || erased.Value.AccountID != eraseID {
-		t.Fatalf("fixture erasure failed: %v, %+v", err, erased.Error)
+	if err := json.Unmarshal(erasedWire, &erased); err != nil || erased.AccountID != eraseID {
+		t.Fatalf("fixture erasure failed: %v, %+v", err, erased)
 	}
 	if replay := callIdentity("/internal/erasure/accounts/erase", erasureToken, erase, http.StatusOK); !bytes.Equal(replay, erasedWire) {
 		t.Fatal("erasure retry changed the response")
 	}
 	ref := map[string]string{"operation": identity.FnAccountErase, "request_id": erase.RequestID}
-	var receipt identity.Result[struct {
-		Found bool `msgpack:"found"`
-		Fact  struct {
-			AccountID     string `msgpack:"account_id"`
-			OwnerRevision int64  `msgpack:"owner_revision"`
-		} `msgpack:"fact"`
-	}]
-	if err := msgpack.Unmarshal(callIdentity("/internal/erasure/receipts/lookup", erasureToken, ref, http.StatusOK), &receipt); err != nil ||
-		!receipt.OK || !receipt.Value.Found || receipt.Value.Fact.AccountID != eraseID || receipt.Value.Fact.OwnerRevision <= 0 {
+	var receipt identity.ErasureLookup
+	if err := json.Unmarshal(callIdentity("/internal/erasure/receipts/lookup", erasureToken, ref, 200), &receipt); err != nil || !receipt.Found || receipt.Fact == nil || receipt.Fact.AccountID != eraseID || receipt.Fact.OwnerRevision <= 0 {
 		t.Fatalf("erasure receipt lookup failed: %v", err)
 	}
 
-	var account identity.Result[identity.AccountProjection]
+	var account identity.AccountProjection
 	raw := callIdentity("/internal/identity/accounts/lookup", serviceToken, lookup, http.StatusOK)
-	if err := msgpack.Unmarshal(raw, &account); err != nil || !account.OK {
+	if err := json.Unmarshal(raw, &account); err != nil || account.AccountID != accountID {
 		t.Fatalf("lookup failed: %v", err)
 	}
 	hold := identity.RetentionHoldRequest{RequestID: "migration-test", AccountID: first["account_id"].(string), HoldID: "fixture-hold", ReasonID: "fixture", AcquisitionID: "fixture-acquisition"}
 	raw = callIdentity("/internal/identity/holds/acquire", serviceToken, hold, http.StatusOK)
-	var acquired identity.Result[identity.RetentionHold]
-	if err := msgpack.Unmarshal(raw, &acquired); err != nil || !acquired.OK {
+	var acquired identity.RetentionHold
+	if err := json.Unmarshal(raw, &acquired); err != nil || !acquired.Active {
 		t.Fatalf("hold failed: %v", err)
 	}
 	if replay := callIdentity("/internal/identity/holds/acquire", serviceToken, hold, http.StatusOK); !bytes.Equal(raw, replay) {
@@ -236,13 +239,13 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	}
 	const workflowToken = "fixture-browser-workflow-token-12345"
 	registerBrowserWorkflowRoutes(mux, identities, commands, workflowToken)
-	complete := map[string]string{"version": browser.ContractVersion, "email": "code@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
+	complete := map[string]string{"email": "code@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
 	callIdentity("/internal/browser/email/complete", serviceToken, complete, http.StatusUnauthorized)
 	readCompletion := func(path string, input map[string]string) browser.CompleteEmailVerificationResult {
 		t.Helper()
 		wire := callIdentity(path, workflowToken, input, http.StatusOK)
 		var result browser.CompleteEmailVerificationResult
-		if err := msgpack.Unmarshal(wire, &result); err != nil || !result.OK || result.AccessToken == "" {
+		if err := json.Unmarshal(wire, &result); err != nil || result.AccessToken == "" {
 			t.Fatalf("private completion failed: %v (%s)", err, result.Error)
 		}
 		return result
@@ -259,7 +262,7 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	if err := worker.drain(context.Background()); err != nil || deliveries != 2 {
 		t.Fatal("signup challenge was not delivered", err)
 	}
-	signup := map[string]string{"version": browser.ContractVersion, "email": "signup@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
+	signup := map[string]string{"email": "signup@example.com", "code": code, "request_id": uuid.NewString(), "intent": "signup"}
 	created := readCompletion("/internal/browser/email/complete", signup)
 	replayed := readCompletion("/internal/browser/email/complete", signup)
 	if created.SessionID != replayed.SessionID || created.AccountID != replayed.AccountID {
@@ -272,13 +275,13 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	const replayRequest = "verification-submit:e4ea8c49c272e26b802e69ae7b7bd71aa05a7afa9f39244ce6bba819e4173129:bananauth-consume"
 	const replayAccount = "c8848ada-b6fe-4283-8266-64dee986ab6b"
 	now := time.Now().Add(-time.Second).UnixMilli()
-	issued, err := callIdentityCommandForTest[identity.EmailVerificationIssueResult](identities[identity.FnEmailSignupIssueV2], identity.EmailVerificationIssueRequest{
+	issued, err := identities.EmailSignupIssueV2(identity.EmailVerificationIssueRequest{
 		RequestID: "legacy-issue", VerificationID: "legacy-otp", EffectID: "legacy-effect", Email: replayEmail, Code: replayCode, Now: now, ExpiresAt: now + 60_000,
 	})
 	if err != nil || !issued.OK || !issued.Value.EffectQueued {
 		t.Fatal("legacy fixture issuance failed", err)
 	}
-	consumed, err := callIdentityCommandForTest[identity.EmailVerificationConsumeResult](identities[identity.FnEmailSignupConsumeV2], identity.EmailVerificationConsumeRequest{
+	consumed, err := identities.EmailSignupConsumeV2(identity.EmailVerificationConsumeRequest{
 		RequestID: replayRequest, AccountID: replayAccount, Email: replayEmail, Code: replayCode, Now: now + 1,
 	})
 	if err != nil || !consumed.OK || !consumed.Value.Verified {
@@ -288,10 +291,6 @@ func TestNativeAccountSessionLifecycle(t *testing.T) {
 	if got["account_id"] != replayAccount {
 		t.Fatal("native retry did not recover the legacy account receipt")
 	}
-}
-
-func callIdentityCommandForTest[T any](command func([]byte) ([]byte, error), request any) (identityResult[T], error) {
-	return callIdentity[T](func(_ string, raw []byte) ([]byte, error) { return command(raw) }, "", request)
 }
 
 type testTransport func(*http.Request) (*http.Response, error)
@@ -311,11 +310,11 @@ func TestSessionHTTPDistinguishesDeniedFromUnavailable(t *testing.T) {
 		{"unavailable", "Bearer example", "unavailable", "session service unavailable", 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := routes(func([]byte) ([]byte, error) {
+			mux := routes(func(browser.ResolveRequest) browser.ResolveResult {
 				if tc.outcome == "" {
 					t.Fatal("resolver called for malformed or absent credentials")
 				}
-				return msgpack.Marshal(browser.ResolveResult{Version: browser.ContractVersion, Error: tc.outcome})
+				return browser.ResolveResult{Version: browser.ContractVersion, Error: tc.outcome}
 			}, nil)
 			request := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
 			request.Header.Set("Authorization", tc.header)
