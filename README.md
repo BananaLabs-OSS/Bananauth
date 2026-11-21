@@ -221,7 +221,17 @@ writer during a cutover rehearsal.
 ## Offline encrypted-notification store conversion
 
 Historical database conversion is maintained separately from the active service.
-Use the preserved offline converter source archive when migrating an older installation; fresh installs require no conversion.
+Use the preserved `bananauth-offline-converter-source` archive when migrating an
+older installation; fresh installs require no conversion. The local archive is
+`~/.codex/archives/bananakit-retired-source-20261121/bananauth-offline-converter-source`.
+From its standalone module root, rehearse against private copies only:
+
+```sh
+go test -mod=readonly ./cmd/migrate-store ./internal/migration
+go run -mod=readonly ./cmd/migrate-store -source /private/old-copy.db -target /private/new-native.db
+```
+
+This converter is an offline operator tool and is never loaded by the server.
 
 The runtime rejects historical notification records until this conversion completes.
 Ciphertext, authenticated message IDs, idempotency keys, account credentials, and
