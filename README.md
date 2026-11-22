@@ -231,6 +231,26 @@ go test -mod=readonly ./cmd/migrate-store ./internal/migration
 go run -mod=readonly ./cmd/migrate-store -source /private/old-copy.db -target /private/new-native.db
 ```
 
+For a PostgreSQL rehearsal, restore into an isolated cluster with a Unix
+socket and create a separate empty destination database in that cluster.
+The command copies identity history only. Keep the restored session store
+available separately for the native startup check.
+
+```sh
+BANANAUTH_MIGRATION_SOURCE='postgresql:///restored?host=/private/rehearsal&port=55477' \
+BANANAUTH_MIGRATION_TARGET='postgresql:///native?host=/private/rehearsal&port=55477' \
+go run -mod=readonly ./cmd/migrate-store -postgres
+```
+
+The source transaction is read-only. The destination publishes command
+history and the identity head atomically. An unsupported legacy payload
+requires explicit reconciliation before conversion can finish. To archive the
+recognized historical email format, add `-archive-key-file /private/archive.key`
+with a fresh, private key for that conversion. Retain the key separately
+from the destination database and keep it out of the running server.
+This option refuses any archived notification that still exists in the
+current identity snapshot.
+
 This converter is an offline operator tool and is never loaded by the server.
 
 The runtime rejects historical notification records until this conversion completes.
