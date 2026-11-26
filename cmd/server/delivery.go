@@ -171,7 +171,11 @@ func (d *deliveryWorker) deliver(ctx context.Context, lease notification.Lease) 
 	if d.testRecipients != nil && !d.testRecipients[recipient] {
 		return "", errors.New("notification held by verification recipient restriction")
 	}
-	body, err := json.Marshal(map[string]any{"from": d.from, "to": []string{message.To}, "subject": message.Subject, "text": message.Text})
+	payload := map[string]any{"from": d.from, "to": []string{message.To}, "subject": message.Subject, "text": message.Text}
+	if markup := sessionsVerificationHTML(message.Subject, message.Text); markup != "" {
+		payload["html"] = markup
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
